@@ -202,7 +202,7 @@ La predicción meteorológica se transforma así en una **propuesta de operació
 | SOC operativo normal | 20–85 % |
 | Ventana sostenible | 6.656 kWh |
 
-Estos valores corresponden únicamente a la instalación utilizada como referencia y podrán sustituirse por los parámetros de otra instalación mediante la configuración del sistema.
+Estos valores corresponden únicamente a la instalación utilizada como referencia y podrán sustituirse por los parámetros de otra instalación mediante la configuración del sistema. El asistente `installation/wizard.py` permite realizar esta adaptación sin editar manualmente los módulos Python.
 
 ---
 
@@ -225,8 +225,10 @@ El desarrollo matemático, los algoritmos y el protocolo experimental se mantien
 
 | Archivo | Responsabilidad |
 |---|---|
-| `config.py` | instalación, localización y parámetros físicos |
-| `demand.py` | vivienda, cargas y perfil de demanda |
+| `config.yaml` | configuración persistente de la instalación |
+| `installation/wizard.py` | asistente de configuración y generación de módulos |
+| `config.py` | parámetros físicos generados a partir de `config.yaml` |
+| `demand.py` | vivienda, cargas y demanda generadas/configuradas a partir de `config.yaml` |
 | `aemet.py` | predicción meteorológica diaria |
 | `aemet_hourly.py` | predicción meteorológica horaria |
 | `solar.py` | modelo físico-predictivo FV |
@@ -318,17 +320,40 @@ Será necesario comparar sistemáticamente predicción y medida real para cuanti
 
 ## ⚙️ Instalación rápida
 
+### Ubuntu / Debian — paquete `.deb`
+
+Descarga una versión publicada del paquete y ejecuta:
+
+```bash
+sudo apt install ./gestion-solar-predictiva_VERSION_all.deb
+gestion-solar-config
+gestion-solar --soc 0.60
+```
+
+`sudo` se utiliza únicamente para instalar el paquete. `gestion-solar-config` y `gestion-solar` deben ejecutarse como usuario normal.
+
+### Desde GitHub
+
 ```bash
 git clone https://github.com/maxwellfree/Gestion-Solar-AEMET-ESIOS.git
 cd Gestion-Solar-AEMET-ESIOS
-python3 -m pip install -r requirements.txt
+chmod +x installation/install.sh
+./installation/install.sh
 ```
 
-Las instrucciones completas, incluida la obtención y configuración de las credenciales de AEMET y ESIOS, se encuentran en:
+El asistente solicita las credenciales de AEMET y ESIOS y permite configurar la instalación fotovoltaica, baterías, vivienda y cargas. La configuración persistente se guarda en `config.yaml`; a partir de ella se generan automáticamente `config.py` y `demand.py`.
+
+Las instrucciones completas se encuentran en:
 
 ➡️ [**docs/INSTALLATION.md**](docs/INSTALLATION.md)
 
-Ejecución básica:
+Ejecución básica desde una instalación `.deb`:
+
+```bash
+gestion-solar --soc 0.60
+```
+
+Ejecución básica desde el código fuente:
 
 ```bash
 python3 main.py --soc 0.60
@@ -590,7 +615,7 @@ Weather prediction is therefore transformed into a **reproducible operational pr
 | Normal operating SOC | 20–85 % |
 | Sustainable energy window | 6.656 kWh |
 
-These parameters describe only the current reference installation and can be replaced by the parameters of another system through the project configuration.
+These parameters describe only the current reference installation and can be replaced by the parameters of another system through the project configuration. The `installation/wizard.py` assistant performs this adaptation without requiring manual edits to the Python modules.
 
 ---
 
@@ -600,11 +625,11 @@ Detailed mathematical models, algorithms and experimental-validation procedures 
 
 | Document | Contents |
 |---|---|
-| 📐 [**MODELen.md**](docs/MODELen.md) | Physical, energy and mathematical model |
-| 🔋 [**DISPATCHen.md**](docs/DISPATCHen.md) | Battery, SOC, grid import/export and hourly dispatch |
-| 📅 [**WEEKLYen.md**](docs/WEEKLYen.md) | Weekly scheduling, flexible loads and thermal management |
-| 🧪 [**VALIDATIONen.md**](docs/VALIDATIONen.md) | Experimental validation methodology |
-| 🏗️ [**ARCHITECTUREen.md**](docs/ARCHITECTUREen.md) | Software architecture and evolution towards real control |
+| 📐 [**MODEL.md**](docs/MODEL.md) | Physical, energy and mathematical model |
+| 🔋 [**DISPATCH.md**](docs/DISPATCH.md) | Battery, SOC, grid import/export and hourly dispatch |
+| 📅 [**WEEKLY.md**](docs/WEEKLY.md) | Weekly scheduling, flexible loads and thermal management |
+| 🧪 [**VALIDATION.md**](docs/VALIDATION.md) | Experimental validation methodology |
+| 🏗️ [**ARCHITECTURE.md**](docs/ARCHITECTURE.md) | Software architecture and evolution towards real control |
 | ⚙️ [**INSTALLATIONen.md**](docs/INSTALLATIONen.md) | Installation, APIs, credentials and setup |
 
 ---
@@ -613,8 +638,10 @@ Detailed mathematical models, algorithms and experimental-validation procedures 
 
 | File | Responsibility |
 |---|---|
-| `config.py` | installation, location and physical parameters |
-| `demand.py` | household loads and demand profile |
+| `config.yaml` | persistent installation-specific configuration |
+| `installation/wizard.py` | configuration assistant and module generator |
+| `config.py` | physical parameters generated from `config.yaml` |
+| `demand.py` | household loads and demand configuration generated from `config.yaml` |
 | `aemet.py` | daily weather forecast |
 | `aemet_hourly.py` | hourly weather forecast |
 | `solar.py` | physics-based predictive PV model |
@@ -706,17 +733,40 @@ Predictions and real measurements must be systematically compared to quantify mo
 
 ## ⚙️ Quick installation
 
+### Ubuntu / Debian — `.deb` package
+
+Download a published package and run:
+
+```bash
+sudo apt install ./gestion-solar-predictiva_VERSION_all.deb
+gestion-solar-config
+gestion-solar --soc 0.60
+```
+
+`sudo` is required only to install the package. Run `gestion-solar-config` and `gestion-solar` as the normal user.
+
+### From GitHub
+
 ```bash
 git clone https://github.com/maxwellfree/Gestion-Solar-AEMET-ESIOS.git
 cd Gestion-Solar-AEMET-ESIOS
-python3 -m pip install -r requirements.txt
+chmod +x installation/install.sh
+./installation/install.sh
 ```
 
-Complete instructions, including AEMET and ESIOS credentials, are available in:
+The wizard requests the AEMET and ESIOS credentials and configures the PV installation, batteries, household and loads. Persistent configuration is stored in `config.yaml`; `config.py` and `demand.py` are then generated automatically.
 
-➡️ [**docs/INSTALLATION.md**](docs/INSTALLATION.md)
+Complete instructions are available in:
 
-Basic execution:
+➡️ [**docs/INSTALLATIONen.md**](docs/INSTALLATIONen.md)
+
+Basic execution with a `.deb` installation:
+
+```bash
+gestion-solar --soc 0.60
+```
+
+Basic execution from source:
 
 ```bash
 python3 main.py --soc 0.60
