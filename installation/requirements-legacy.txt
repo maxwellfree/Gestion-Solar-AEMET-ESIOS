@@ -1,0 +1,10 @@
+# Dependencias LEGACY para Gestión Solar Predictiva
+#
+# Seleccionadas automáticamente por installation/install.sh cuando
+# detecta Python 3.6 o Python 3.7 (por ejemplo Ubuntu 18.04).
+#
+# NO usar este archivo manualmente en instalaciones modernas.
+
+requests>=2.25,<2.28
+python-dotenv>=0.19,<0.21
+pytz>=2021.1,<2025
