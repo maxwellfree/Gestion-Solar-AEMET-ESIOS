@@ -43,6 +43,15 @@ from dotenv import load_dotenv
 
 from municipios import MUNICIPIOS
 
+# La caché evita repetir durante el mismo día consultas idénticas a AEMET.
+# El primer acceso obtiene los datos de la red y los guarda; los siguientes
+# reutilizan la copia local salvo que el usuario haya indicado --refresh.
+from cache import (
+    get_cache,
+    make_key,
+    set_cache,
+)
+
 
 # ==========================================================
 # Configuración general
@@ -751,37 +760,87 @@ def day_solar_score(
 
 def obtener_prevision_solar(
     municipio: str,
+    refresh: bool = False,
 ) -> List[Dict[str, Any]]:
     """
-    Obtiene y procesa toda la predicción disponible para
-    un municipio.
+    Obtiene y procesa toda la predicción disponible para un municipio.
 
-    Esta es una de las funciones principales que utilizará
-    posteriormente el optimizador.
+    Por defecto utiliza una caché diaria para evitar repetir consultas
+    idénticas a AEMET. La primera consulta correcta del día se descarga
+    desde AEMET y se almacena en RAM y en disco. Las siguientes llamadas
+    reutilizan esos datos.
 
-    Ejemplo
-    -------
-    prevision = obtener_prevision_solar("Tielmes")
+    Si ``refresh=True``, se ignora la caché existente, se vuelve a consultar
+    AEMET y, si la respuesta es válida, se sustituye la copia del día.
 
     Parameters
     ----------
     municipio : str
         Nombre o código AEMET del municipio.
 
+    refresh : bool, optional
+        Si es True, fuerza una nueva consulta a AEMET.
+        Por defecto es False.
+
     Returns
     -------
     list
         Lista de días meteorológicos procesados.
+
+    Notes
+    -----
+    Se almacenan en caché los datos RAW devueltos por AEMET, no el resultado
+    de ``day_solar_score()``. De esta forma, si posteriormente se modifica
+    nuestro algoritmo de procesamiento, podemos recalcular los índices usando
+    exactamente la misma predicción meteorológica original.
     """
 
+    # Resolver primero el código hace que "Tielmes" y "28146", por ejemplo,
+    # apunten a la misma entrada de caché.
     codigo = obtener_codigo(
         municipio
     )
 
-    dias_raw = fetch_forecast(
-        codigo
+    # La clave identifica de manera inequívoca esta fuente y esta petición.
+    # La fecha NO necesita incluirse aquí porque cache.py ya separa físicamente
+    # las entradas por día.
+    clave_cache = make_key(
+        "aemet",
+        "prediccion_diaria",
+        municipio=codigo,
     )
 
+    # Con refresh=False se intenta RAM y después disco.
+    # Con refresh=True get_cache() devuelve None deliberadamente.
+    dias_raw = get_cache(
+        clave_cache,
+        refresh=refresh,
+    )
+
+    if dias_raw is None:
+
+        # No existe una copia válida o el usuario ha solicitado --refresh.
+        # Sólo en este punto se accede realmente a AEMET OpenData.
+        dias_raw = fetch_forecast(
+            codigo
+        )
+
+        # fetch_forecast() ya comprueba que AEMET haya devuelto una lista
+        # no vacía de días. Por eso sólo guardamos la caché después de que
+        # esta función haya terminado correctamente.
+        set_cache(
+            clave_cache,
+            dias_raw,
+            metadata={
+                "provider": "AEMET OpenData",
+                "request": "prediccion_diaria",
+                "municipio": codigo,
+            },
+        )
+
+    # Procesamos siempre los datos después de recuperarlos.
+    # Esto es deliberado: la caché conserva la predicción original de AEMET,
+    # mientras que nuestro modelo puede evolucionar independientemente.
     dias_analizados = [
         day_solar_score(dia)
         for dia in dias_raw
@@ -800,6 +859,7 @@ def obtener_prevision_solar(
 
 def obtener_prevision_solar_hoy(
     municipio: str,
+    refresh: bool = False,
 ) -> Dict[str, Any]:
     """
     Obtiene la predicción solar correspondiente al día actual.
@@ -809,6 +869,9 @@ def obtener_prevision_solar_hoy(
     municipio : str
         Nombre o código AEMET del municipio.
 
+    refresh : bool, optional
+        Si es True, ignora la caché y fuerza una nueva consulta a AEMET.
+
     Returns
     -------
     dict
@@ -816,7 +879,8 @@ def obtener_prevision_solar_hoy(
     """
 
     prevision = obtener_prevision_solar(
-        municipio
+        municipio,
+        refresh=refresh,
     )
 
     hoy = datetime.now().date()

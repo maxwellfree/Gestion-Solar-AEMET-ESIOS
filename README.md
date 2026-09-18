@@ -202,7 +202,7 @@ La predicción meteorológica se transforma así en una **propuesta de operació
 | SOC operativo normal | 20–85 % |
 | Ventana sostenible | 6.656 kWh |
 
-Estos valores corresponden únicamente a la instalación utilizada como referencia y podrán sustituirse por los parámetros de otra instalación mediante la configuración del sistema. El asistente `installation/wizard.py` permite realizar esta adaptación sin editar manualmente los módulos Python.
+Estos valores corresponden únicamente a la instalación utilizada como referencia y podrán sustituirse por los parámetros de otra instalación mediante la configuración del sistema.
 
 ---
 
@@ -225,19 +225,65 @@ El desarrollo matemático, los algoritmos y el protocolo experimental se mantien
 
 | Archivo | Responsabilidad |
 |---|---|
-| `config.yaml` | configuración persistente de la instalación |
-| `installation/wizard.py` | asistente de configuración y generación de módulos |
-| `config.py` | parámetros físicos generados a partir de `config.yaml` |
-| `demand.py` | vivienda, cargas y demanda generadas/configuradas a partir de `config.yaml` |
+| `config.py` | instalación, localización y parámetros físicos |
+| `demand.py` | vivienda, cargas y perfil de demanda |
 | `aemet.py` | predicción meteorológica diaria |
 | `aemet_hourly.py` | predicción meteorológica horaria |
 | `solar.py` | modelo físico-predictivo FV |
 | `esios.py` | precios eléctricos |
+| `cache.py` | caché persistente de AEMET y ESIOS |
 | `balance.py` | balance FV–demanda–precios |
 | `dispatch.py` | batería, red, compra y venta |
 | `optimizer.py` | estrategia sostenible-predictiva |
 | `weekly.py` | planificación semanal de servicios |
 | `main.py` | integración y presentación |
+
+---
+
+
+## 💾 Caché de datos externos
+
+Las consultas a **AEMET** y **ESIOS** se almacenan en una caché local persistente para evitar descargas repetidas durante las pruebas y la operación normal.
+
+La política es:
+
+```text
+RAM → caché en disco → API externa
+```
+
+En una ejecución normal:
+
+```bash
+python3 main.py --soc 0.60
+```
+
+el programa reutiliza primero los datos ya disponibles. Al finalizar Python, la caché RAM desaparece, pero la copia en disco permanece disponible para ejecuciones posteriores.
+
+Para forzar una actualización de los datos externos:
+
+```bash
+python3 main.py --soc 0.60 --refresh
+```
+
+`--refresh` obliga a actualizar una vez cada petición distinta durante esa ejecución. Una vez descargada correctamente una respuesta nueva, las peticiones idénticas posteriores del mismo proceso reutilizan esa copia recién actualizada.
+
+La caché se organiza por fecha y por petición. AEMET diaria, AEMET horaria y cada indicador ESIOS se almacenan de forma independiente. Las credenciales y API keys **nunca** forman parte de las claves ni de los metadatos de caché.
+
+La retención se controla en `cache.py` mediante:
+
+```python
+CACHE_RETENTION_DAYS = 365
+```
+
+El valor `0` desactiva la limpieza automática y conserva indefinidamente las carpetas fechadas.
+
+Además de acelerar las pruebas, conservar temporalmente las respuestas originales permite conocer qué información externa estaba disponible cuando el algoritmo tomó una decisión. Esto resulta útil para reproducibilidad y validación experimental.
+
+La carpeta de caché es un dato local de ejecución y no debe publicarse en Git. El `.gitignore` debe incluir:
+
+```gitignore
+cache/
+```
 
 ---
 
@@ -320,40 +366,17 @@ Será necesario comparar sistemáticamente predicción y medida real para cuanti
 
 ## ⚙️ Instalación rápida
 
-### Ubuntu / Debian — paquete `.deb`
-
-Descarga una versión publicada del paquete y ejecuta:
-
-```bash
-sudo apt install ./gestion-solar-predictiva_VERSION_all.deb
-gestion-solar-config
-gestion-solar --soc 0.60
-```
-
-`sudo` se utiliza únicamente para instalar el paquete. `gestion-solar-config` y `gestion-solar` deben ejecutarse como usuario normal.
-
-### Desde GitHub
-
 ```bash
 git clone https://github.com/maxwellfree/Gestion-Solar-AEMET-ESIOS.git
 cd Gestion-Solar-AEMET-ESIOS
-chmod +x installation/install.sh
-./installation/install.sh
+python3 -m pip install -r requirements.txt
 ```
 
-El asistente solicita las credenciales de AEMET y ESIOS y permite configurar la instalación fotovoltaica, baterías, vivienda y cargas. La configuración persistente se guarda en `config.yaml`; a partir de ella se generan automáticamente `config.py` y `demand.py`.
-
-Las instrucciones completas se encuentran en:
+Las instrucciones completas, incluida la obtención y configuración de las credenciales de AEMET y ESIOS, se encuentran en:
 
 ➡️ [**docs/INSTALLATION.md**](docs/INSTALLATION.md)
 
-Ejecución básica desde una instalación `.deb`:
-
-```bash
-gestion-solar --soc 0.60
-```
-
-Ejecución básica desde el código fuente:
+Ejecución básica:
 
 ```bash
 python3 main.py --soc 0.60
@@ -369,6 +392,12 @@ python3 main.py \
     --mostrar-solar \
     --mostrar-balance \
     --mostrar-plan-horario
+```
+
+Para forzar una nueva descarga de AEMET y ESIOS:
+
+```bash
+python3 main.py --soc 0.60 --refresh
 ```
 
 Planificación semanal independiente:
@@ -615,7 +644,7 @@ Weather prediction is therefore transformed into a **reproducible operational pr
 | Normal operating SOC | 20–85 % |
 | Sustainable energy window | 6.656 kWh |
 
-These parameters describe only the current reference installation and can be replaced by the parameters of another system through the project configuration. The `installation/wizard.py` assistant performs this adaptation without requiring manual edits to the Python modules.
+These parameters describe only the current reference installation and can be replaced by the parameters of another system through the project configuration.
 
 ---
 
@@ -630,7 +659,7 @@ Detailed mathematical models, algorithms and experimental-validation procedures 
 | 📅 [**WEEKLY.md**](docs/WEEKLY.md) | Weekly scheduling, flexible loads and thermal management |
 | 🧪 [**VALIDATION.md**](docs/VALIDATION.md) | Experimental validation methodology |
 | 🏗️ [**ARCHITECTURE.md**](docs/ARCHITECTURE.md) | Software architecture and evolution towards real control |
-| ⚙️ [**INSTALLATIONen.md**](docs/INSTALLATIONen.md) | Installation, APIs, credentials and setup |
+| ⚙️ [**INSTALLATION.md**](docs/INSTALLATION.md) | Installation, APIs, credentials and setup |
 
 ---
 
@@ -638,19 +667,65 @@ Detailed mathematical models, algorithms and experimental-validation procedures 
 
 | File | Responsibility |
 |---|---|
-| `config.yaml` | persistent installation-specific configuration |
-| `installation/wizard.py` | configuration assistant and module generator |
-| `config.py` | physical parameters generated from `config.yaml` |
-| `demand.py` | household loads and demand configuration generated from `config.yaml` |
+| `config.py` | installation, location and physical parameters |
+| `demand.py` | household loads and demand profile |
 | `aemet.py` | daily weather forecast |
 | `aemet_hourly.py` | hourly weather forecast |
 | `solar.py` | physics-based predictive PV model |
 | `esios.py` | electricity prices |
+| `cache.py` | persistent AEMET and ESIOS cache |
 | `balance.py` | PV–demand–price balance |
 | `dispatch.py` | battery, grid, import and export |
 | `optimizer.py` | sustainable predictive strategy |
 | `weekly.py` | weekly service scheduling |
 | `main.py` | integration and presentation |
+
+---
+
+
+## 💾 External-data cache
+
+Queries to **AEMET** and **ESIOS** are stored in a persistent local cache to avoid repeated downloads during testing and normal operation.
+
+The lookup policy is:
+
+```text
+RAM → disk cache → external API
+```
+
+During a normal execution:
+
+```bash
+python3 main.py --soc 0.60
+```
+
+the program first reuses already available data. The RAM cache disappears when Python exits, while the disk copy remains available to subsequent executions.
+
+To force external data to be updated:
+
+```bash
+python3 main.py --soc 0.60 --refresh
+```
+
+`--refresh` forces each distinct request to be updated once during that execution. After a new response has been successfully downloaded, later identical requests in the same process reuse the newly refreshed copy.
+
+The cache is organized by date and request. Daily AEMET, hourly AEMET and each ESIOS indicator are stored independently. Credentials and API keys are **never** included in cache keys or metadata.
+
+Retention is controlled in `cache.py` through:
+
+```python
+CACHE_RETENTION_DAYS = 365
+```
+
+A value of `0` disables automatic cleanup and retains dated cache directories indefinitely.
+
+Besides speeding up testing, temporarily retaining original responses makes it possible to determine which external information was available when the algorithm made a decision. This is useful for reproducibility and experimental validation.
+
+The cache directory contains local runtime data and must not be committed to Git. `.gitignore` should include:
+
+```gitignore
+cache/
+```
 
 ---
 
@@ -733,40 +808,17 @@ Predictions and real measurements must be systematically compared to quantify mo
 
 ## ⚙️ Quick installation
 
-### Ubuntu / Debian — `.deb` package
-
-Download a published package and run:
-
-```bash
-sudo apt install ./gestion-solar-predictiva_VERSION_all.deb
-gestion-solar-config
-gestion-solar --soc 0.60
-```
-
-`sudo` is required only to install the package. Run `gestion-solar-config` and `gestion-solar` as the normal user.
-
-### From GitHub
-
 ```bash
 git clone https://github.com/maxwellfree/Gestion-Solar-AEMET-ESIOS.git
 cd Gestion-Solar-AEMET-ESIOS
-chmod +x installation/install.sh
-./installation/install.sh
+python3 -m pip install -r requirements.txt
 ```
 
-The wizard requests the AEMET and ESIOS credentials and configures the PV installation, batteries, household and loads. Persistent configuration is stored in `config.yaml`; `config.py` and `demand.py` are then generated automatically.
+Complete instructions, including AEMET and ESIOS credentials, are available in:
 
-Complete instructions are available in:
+➡️ [**docs/INSTALLATION.md**](docs/INSTALLATION.md)
 
-➡️ [**docs/INSTALLATIONen.md**](docs/INSTALLATIONen.md)
-
-Basic execution with a `.deb` installation:
-
-```bash
-gestion-solar --soc 0.60
-```
-
-Basic execution from source:
+Basic execution:
 
 ```bash
 python3 main.py --soc 0.60
@@ -782,6 +834,12 @@ python3 main.py \
     --mostrar-solar \
     --mostrar-balance \
     --mostrar-plan-horario
+```
+
+To force a fresh AEMET and ESIOS download:
+
+```bash
+python3 main.py --soc 0.60 --refresh
 ```
 
 Independent weekly planning:

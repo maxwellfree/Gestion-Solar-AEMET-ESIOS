@@ -47,6 +47,15 @@ from typing import Any, Dict, List, Optional, Union
 import requests
 from dotenv import load_dotenv
 
+# La caché evita repetir consultas idénticas a ESIOS durante el mismo día.
+# Se almacenan las respuestas originales de cada indicador, no la tabla
+# procesada, para conservar los datos de entrada y poder reprocesarlos después.
+from cache import (
+    get_cache,
+    make_key,
+    set_cache,
+)
+
 # ==========================================================
 # Configuración de ESIOS
 # ==========================================================
@@ -383,9 +392,14 @@ def obtener_indicador(
     fecha_fin: Union[str, date, datetime],
     time_trunc: str = "hour",
     time_agg: str = "average",
+    refresh: bool = False,
 ) -> Dict[str, Any]:
     """
-    Descarga un indicador de ESIOS para un intervalo temporal.
+    Obtiene un indicador de ESIOS para un intervalo temporal.
+
+    La respuesta original del campo ``indicator`` se guarda en una caché
+    diaria. La clave incluye todos los parámetros que pueden modificar la
+    respuesta: ID del indicador, fechas, resolución y agregación.
 
     Parameters
     ----------
@@ -404,10 +418,13 @@ def obtener_indicador(
     time_agg : str
         Tipo de agregación utilizada por ESIOS.
 
+    refresh : bool, optional
+        Si es True, ignora la caché existente y fuerza una nueva consulta.
+
     Returns
     -------
     dict
-        Contenido del campo 'indicator' devuelto por ESIOS.
+        Contenido original del campo 'indicator' devuelto por ESIOS.
     """
 
     inicio = normalizar_fecha(
@@ -417,6 +434,27 @@ def obtener_indicador(
     fin = normalizar_fecha(
         fecha_fin
     )
+
+    # Todos estos parámetros afectan potencialmente al resultado y, por tanto,
+    # deben formar parte de la clave. La API key nunca se incluye.
+    clave_cache = make_key(
+        "esios",
+        "indicador",
+        indicador_id=int(indicador_id),
+        fecha_inicio=inicio,
+        fecha_fin=fin,
+        time_trunc=time_trunc,
+        time_agg=time_agg,
+        locale="es",
+    )
+
+    indicador = get_cache(
+        clave_cache,
+        refresh=refresh,
+    )
+
+    if indicador is not None:
+        return indicador
 
     url = (
         f"{BASE_URL_ESIOS}/indicators/"
@@ -435,6 +473,7 @@ def obtener_indicador(
         "locale": "es",
     }
 
+    # Sólo llegamos aquí si no había caché válida o se ha solicitado refresh.
     datos = get_json(
         url,
         params=parametros,
@@ -450,6 +489,22 @@ def obtener_indicador(
             f"{indicador_id} no contiene "
             "el campo 'indicator'."
         )
+
+    # Guardamos únicamente después de validar que la respuesta contiene el
+    # indicador esperado. Así una respuesta errónea nunca sustituye a la caché.
+    set_cache(
+        clave_cache,
+        indicador,
+        metadata={
+            "provider": "ESIOS - Red Electrica",
+            "request": "indicador",
+            "indicador_id": int(indicador_id),
+            "fecha_inicio": inicio,
+            "fecha_fin": fin,
+            "time_trunc": time_trunc,
+            "time_agg": time_agg,
+        },
+    )
 
     return indicador
 
@@ -671,37 +726,34 @@ def combinar_precios(
 
 def obtener_precios(
     fecha: Union[str, date, datetime],
+    refresh: bool = False,
 ) -> List[Dict[str, Any]]:
     """
-    Obtiene todos los precios eléctricos relevantes para una
-    fecha determinada.
+    Obtiene todos los precios eléctricos relevantes para una fecha.
 
-    Esta será la función principal utilizada por main.py
-    y optimizer.py.
-
-    Internamente consulta:
+    Internamente consulta tres indicadores independientes de ESIOS:
 
     - mercado SPOT;
     - precio de compra PVPC;
-    - precio de compensación de excedentes.
+    - compensación de excedentes.
 
-    Después filtra las zonas geográficas correspondientes y
-    devuelve una única tabla combinada.
+    Cada indicador dispone de su propia entrada de caché. Esto permite
+    reutilizar por separado cualquier serie ya descargada y conserva los
+    datos originales para futuras tareas de validación.
 
     Parameters
     ----------
     fecha : str, date o datetime
         Fecha deseada.
 
+    refresh : bool, optional
+        Si es True, fuerza la actualización de los tres indicadores ESIOS.
+
     Returns
     -------
     list
-        Tabla temporal con:
-
-        - precio SPOT;
-        - precio de compra;
-        - precio de venta;
-        - diferencia compra-venta.
+        Tabla temporal combinada con precios SPOT, compra PVPC,
+        compensación de excedentes y diferencia compra-venta.
     """
 
     fecha_txt = normalizar_fecha(
@@ -716,6 +768,7 @@ def obtener_precios(
         PRECIO_SPOT,
         fecha_txt,
         fecha_txt,
+        refresh=refresh,
     )
 
     precios_spot = extraer_precios(
@@ -731,6 +784,7 @@ def obtener_precios(
         PRECIO_COMPRA_PVPC,
         fecha_txt,
         fecha_txt,
+        refresh=refresh,
     )
 
     precios_pvpc = extraer_precios(
@@ -746,6 +800,7 @@ def obtener_precios(
         PRECIO_EXCEDENTES,
         fecha_txt,
         fecha_txt,
+        refresh=refresh,
     )
 
     precios_excedentes = extraer_precios(
@@ -764,14 +819,21 @@ def obtener_precios(
     )
 
 
-def obtener_precios_hoy() -> List[Dict[str, Any]]:
+def obtener_precios_hoy(
+    refresh: bool = False,
+) -> List[Dict[str, Any]]:
     """
-    Atajo para obtener los precios correspondientes
-    al día actual.
+    Atajo para obtener los precios correspondientes al día actual.
+
+    Parameters
+    ----------
+    refresh : bool, optional
+        Si es True, fuerza una nueva consulta de los indicadores ESIOS.
     """
 
     return obtener_precios(
-        datetime.now().date()
+        datetime.now().date(),
+        refresh=refresh,
     )
 
 

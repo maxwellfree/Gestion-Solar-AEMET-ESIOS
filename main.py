@@ -35,8 +35,8 @@ Su responsabilidad es únicamente:
     2. Determinar la fecha de trabajo.
     3. Cargar la configuración física del sistema.
     4. Construir el perfil horario de demanda.
-    5. Obtener la previsión meteorológica.
-    6. Obtener los precios eléctricos.
+    5. Obtener la previsión meteorológica, utilizando caché cuando proceda.
+    6. Obtener los precios eléctricos, utilizando caché cuando proceda.
     7. Incorporar el estado actual de la batería.
     8. Ejecutar la estrategia seleccionada.
     9. Mostrar los resultados.
@@ -848,6 +848,15 @@ def main():
     )
 
 
+    parser.add_argument(
+        "--refresh",
+        action="store_true",
+        help=(
+            "Ignora la caché local y fuerza una nueva descarga "
+            "de los datos externos (AEMET y ESIOS)."
+        ),
+    )
+
     args = parser.parse_args()
 
     try:
@@ -905,7 +914,8 @@ def main():
 
         prevision_completa = (
             obtener_prevision_solar(
-                  municipio
+                municipio,
+                refresh=args.refresh,
             )
         )
 
@@ -920,7 +930,8 @@ def main():
         # ==================================================
 
         prevision_horaria = obtener_prevision_horaria(
-             municipio
+            municipio,
+            refresh=args.refresh,
         )
 
         # ==================================================
@@ -928,7 +939,8 @@ def main():
         # ==================================================
 
         precios = obtener_precios(
-            hoy
+            hoy,
+            refresh=args.refresh,
         )
 
         # ==================================================
@@ -949,6 +961,7 @@ def main():
         plan_semanal = generar_plan_semanal(
             demanda=demanda,
             prevision_semanal=prevision_completa,
+            prevision_horaria=prevision_horaria,
         )
 
         # ==================================================

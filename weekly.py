@@ -4,7 +4,32 @@ weekly.py
 
 Planificador semanal sostenible de servicios energéticos.
 
-Versión 2.
+Versión 4.
+
+Esta versión añade una planificación térmica híbrida:
+
+    - primeras 48 horas:
+        temperatura horaria AEMET;
+
+    - resto del horizonte semanal:
+        Tmax/Tmin de la predicción diaria.
+
+La climatización se decide así con la mejor resolución temporal
+disponible y se degrada de forma controlada hacia una planificación
+orientativa cuando aumenta el horizonte.
+
+Esta versión incorpora la temperatura prevista por AEMET como variable
+de decisión para la climatización semanal.
+
+En verano se utiliza principalmente Tmax para decidir si conviene:
+    - no climatizar;
+    - retrasar el encendido;
+    - climatizar durante parte de la ventana solar;
+    - mantener la ventana 12:00-18:00 en días muy cálidos.
+
+En invierno se utiliza Tmin cuando está disponible. Si la predicción
+diaria recibida todavía no contiene Tmin, se utiliza Tmax como criterio
+provisional y se marca la fuente de decisión.
 
 ================================================================
 OBJETIVO
@@ -409,22 +434,22 @@ def determinar_tipo_servicio(
     carga,
 ):
     """
-    Clasifica automáticamente una carga.
+    Clasifica físicamente una carga.
 
-    Se permite además definir explícitamente:
+    En esta versión las características físicas conocidas tienen
+    prioridad sobre una etiqueta genérica ``tipo_servicio="tarea"``.
 
-        tipo_servicio
+    Esto evita que:
+        - el termo eléctrico;
+        - las bombas de calor;
+        - los equipos de aire acondicionado;
+        - el riego
 
-    dentro de demand.py.
+    aparezcan erróneamente como tareas desplazables.
+
+    Una etiqueta explícita distinta de ``tarea`` sigue respetándose
+    para permitir configuraciones avanzadas desde demand.py.
     """
-
-    tipo_explicitado = carga.get(
-        "tipo_servicio"
-    )
-
-    if tipo_explicitado:
-
-        return tipo_explicitado
 
     nombre = (
         carga.get(
@@ -433,6 +458,10 @@ def determinar_tipo_servicio(
         )
         .lower()
     )
+
+    # ------------------------------------------------------
+    # Clasificación física prioritaria
+    # ------------------------------------------------------
 
     if (
         "riego" in nombre
@@ -456,6 +485,20 @@ def determinar_tipo_servicio(
 
     if "acs" in nombre:
         return "termica"
+
+    # ------------------------------------------------------
+    # Etiqueta explícita para otros servicios
+    # ------------------------------------------------------
+
+    tipo_explicitado = carga.get(
+        "tipo_servicio"
+    )
+
+    if (
+        tipo_explicitado
+        and tipo_explicitado != "tarea"
+    ):
+        return tipo_explicitado
 
     return "tarea"
 
@@ -1239,15 +1282,928 @@ def planificar_tareas(
 # Planificación de climatización
 # ==========================================================
 
+def _valor_temperatura(
+    dia,
+    *claves,
+):
+    """
+    Recupera una temperatura desde el registro diario de AEMET.
+
+    Se prueban varias claves para mantener compatibilidad con
+    distintas versiones de aemet.py.
+    """
+
+    for clave in claves:
+
+        valor = dia.get(
+            clave
+        )
+
+        if valor is None:
+            continue
+
+        try:
+            return float(
+                valor
+            )
+
+        except (
+            TypeError,
+            ValueError,
+        ):
+            continue
+
+    return None
+
+
+def obtener_temperaturas_aemet_dia(
+    dia,
+):
+    """
+    Devuelve Tmax y Tmin previstas.
+
+    La versión actual de aemet.py ya proporciona Tmax.
+
+    Si en el futuro se añade Tmin al diccionario diario, weekly.py
+    empezará a utilizarla automáticamente sin necesidad de cambiar
+    esta función.
+    """
+
+    tmax = _valor_temperatura(
+        dia,
+        "tmax",
+        "temperatura_max",
+        "temperatura_maxima",
+    )
+
+    tmin = _valor_temperatura(
+        dia,
+        "tmin",
+        "temperatura_min",
+        "temperatura_minima",
+    )
+
+    return (
+        tmax,
+        tmin,
+    )
+
+
+def decidir_climatizacion_verano(
+    nombre_servicio,
+    tmax,
+):
+    """
+    Decide la ventana de refrigeración a partir de Tmax AEMET.
+
+    Los umbrales son parámetros iniciales de control y podrán
+    trasladarse posteriormente a config.py.
+
+    Returns
+    -------
+    list
+        Lista de ventanas (inicio, fin, nivel, motivo).
+        Una lista vacía significa que no se recomienda climatizar.
+    """
+
+    if tmax is None:
+
+        return [
+            (
+                "12:00",
+                "18:00",
+                "sin_dato",
+                (
+                    "No hay Tmax disponible; se conserva de forma "
+                    "provisional la ventana estival habitual."
+                ),
+            )
+        ]
+
+    es_despensa = (
+        "despensa"
+        in nombre_servicio.lower()
+    )
+
+    # ------------------------------------------------------
+    # Habitación despensa
+    # ------------------------------------------------------
+    #
+    # Se mantiene un criterio algo más conservador porque el
+    # objetivo es conservar alimentos y no únicamente confort.
+
+    if es_despensa:
+
+        if tmax < 26.0:
+            return []
+
+        if tmax < 30.0:
+
+            return [
+                (
+                    "14:00",
+                    "17:00",
+                    "suave",
+                    (
+                        f"Tmax AEMET = {tmax:.1f} °C. "
+                        "Refrigeración moderada de la despensa."
+                    ),
+                )
+            ]
+
+        if tmax < 34.0:
+
+            return [
+                (
+                    "13:00",
+                    "18:00",
+                    "media",
+                    (
+                        f"Tmax AEMET = {tmax:.1f} °C. "
+                        "Conviene anticipar la refrigeración."
+                    ),
+                )
+            ]
+
+        return [
+            (
+                "12:00",
+                "18:00",
+                "alta",
+                (
+                    f"Tmax AEMET = {tmax:.1f} °C. "
+                    "Día muy cálido: usar la ventana solar completa."
+                ),
+            )
+        ]
+
+    # ------------------------------------------------------
+    # Climatización general de la vivienda
+    # ------------------------------------------------------
+
+    if tmax < 27.0:
+        return []
+
+    if tmax < 30.0:
+
+        return [
+            (
+                "15:00",
+                "18:00",
+                "suave",
+                (
+                    f"Tmax AEMET = {tmax:.1f} °C. "
+                    "Carga térmica moderada; se retrasa el encendido."
+                ),
+            )
+        ]
+
+    if tmax < 34.0:
+
+        return [
+            (
+                "13:00",
+                "18:00",
+                "media",
+                (
+                    f"Tmax AEMET = {tmax:.1f} °C. "
+                    "Se aprovecha principalmente la producción FV."
+                ),
+            )
+        ]
+
+    return [
+        (
+            "12:00",
+            "18:00",
+            "alta",
+            (
+                f"Tmax AEMET = {tmax:.1f} °C. "
+                "Día muy cálido: mantener la estrategia habitual "
+                "12:00-18:00 y priorizar FV directa."
+            ),
+        )
+    ]
+
+
+def decidir_climatizacion_invierno(
+    tmax,
+    tmin,
+):
+    """
+    Decide las ventanas de calefacción.
+
+    Se usa Tmin cuando está disponible porque describe mejor la
+    necesidad de calefacción matinal.
+
+    Si Tmin todavía no llega desde aemet.py, se utiliza Tmax como
+    criterio provisional. El resultado indica explícitamente qué
+    temperatura se ha empleado.
+    """
+
+    # ------------------------------------------------------
+    # Caso preferente: Tmin disponible
+    # ------------------------------------------------------
+
+    if tmin is not None:
+
+        if tmin <= 3.0:
+
+            return [
+                (
+                    "07:30",
+                    "09:00",
+                    "alta",
+                    (
+                        f"Tmin AEMET = {tmin:.1f} °C. "
+                        "Calefacción matinal recomendada."
+                    ),
+                ),
+                (
+                    "18:00",
+                    "22:00",
+                    "alta",
+                    (
+                        f"Tmin AEMET = {tmin:.1f} °C. "
+                        "Mantener calefacción durante la ocupación "
+                        "de la tarde."
+                    ),
+                ),
+            ]
+
+        if tmin <= 7.0:
+
+            return [
+                (
+                    "07:30",
+                    "08:30",
+                    "media",
+                    (
+                        f"Tmin AEMET = {tmin:.1f} °C. "
+                        "Apoyo térmico matinal."
+                    ),
+                ),
+                (
+                    "18:00",
+                    "21:30",
+                    "media",
+                    (
+                        f"Tmin AEMET = {tmin:.1f} °C. "
+                        "Calefacción vespertina moderada."
+                    ),
+                ),
+            ]
+
+        if tmin <= 12.0:
+
+            return [
+                (
+                    "18:00",
+                    "21:00",
+                    "suave",
+                    (
+                        f"Tmin AEMET = {tmin:.1f} °C. "
+                        "Solo se prevé apoyo térmico vespertino."
+                    ),
+                )
+            ]
+
+        return []
+
+    # ------------------------------------------------------
+    # Fallback: solo Tmax disponible
+    # ------------------------------------------------------
+
+    if tmax is None:
+
+        return [
+            (
+                "18:00",
+                "22:00",
+                "sin_dato",
+                (
+                    "No hay temperatura mínima prevista. "
+                    "Se mantiene provisionalmente la ventana habitual."
+                ),
+            )
+        ]
+
+    if tmax < 10.0:
+
+        return [
+            (
+                "07:30",
+                "09:00",
+                "alta",
+                (
+                    f"Solo se dispone de Tmax AEMET = {tmax:.1f} °C. "
+                    "Se prevé un día frío y se recomienda apoyo matinal."
+                ),
+            ),
+            (
+                "18:00",
+                "22:00",
+                "alta",
+                (
+                    f"Solo se dispone de Tmax AEMET = {tmax:.1f} °C. "
+                    "Se prevé calefacción vespertina."
+                ),
+            ),
+        ]
+
+    if tmax < 15.0:
+
+        return [
+            (
+                "18:00",
+                "21:30",
+                "media",
+                (
+                    f"Solo se dispone de Tmax AEMET = {tmax:.1f} °C. "
+                    "Se recomienda calefacción vespertina moderada."
+                ),
+            )
+        ]
+
+    if tmax < 18.0:
+
+        return [
+            (
+                "19:00",
+                "21:00",
+                "suave",
+                (
+                    f"Solo se dispone de Tmax AEMET = {tmax:.1f} °C. "
+                    "Necesidad térmica prevista reducida."
+                ),
+            )
+        ]
+
+    return []
+
+
+def indexar_prevision_horaria_por_fecha(
+    prevision_horaria,
+):
+    """
+    Agrupa la predicción horaria AEMET por fecha.
+
+    Parameters
+    ----------
+    prevision_horaria : list or None
+        Registros procedentes de
+        aemet_hourly.obtener_prevision_horaria().
+
+    Returns
+    -------
+    dict
+        {
+            date(...): [registro_00, registro_01, ...],
+            ...
+        }
+    """
+
+    indice = {}
+
+    for registro in prevision_horaria or []:
+
+        fecha = registro.get(
+            "fecha"
+        )
+
+        if fecha is None:
+            continue
+
+        indice.setdefault(
+            fecha,
+            [],
+        ).append(
+            registro
+        )
+
+    for fecha in indice:
+
+        indice[
+            fecha
+        ].sort(
+            key=lambda r: r.get(
+                "datetime"
+            )
+        )
+
+    return indice
+
+
+def _hora_registro_decimal(
+    registro,
+):
+    """
+    Obtiene la hora decimal de un registro AEMET horario.
+    """
+
+    hora = registro.get(
+        "hora"
+    )
+
+    if hora:
+
+        try:
+            return hora_a_decimal(
+                hora
+            )
+
+        except (
+            ValueError,
+            AttributeError,
+        ):
+            pass
+
+    fecha_hora = registro.get(
+        "datetime"
+    )
+
+    if fecha_hora is not None:
+
+        return (
+            fecha_hora.hour
+            + fecha_hora.minute / 60.0
+        )
+
+    return None
+
+
+def _temperatura_horaria(
+    registro,
+):
+    """
+    Recupera la temperatura horaria AEMET.
+    """
+
+    valor = registro.get(
+        "temperatura_c"
+    )
+
+    if valor is None:
+        return None
+
+    try:
+        return float(
+            valor
+        )
+
+    except (
+        TypeError,
+        ValueError,
+    ):
+        return None
+
+
+def _registro_en_ventana(
+    registro,
+    inicio_h,
+    fin_h,
+):
+    """
+    Indica si el registro pertenece a una ventana horaria.
+    """
+
+    hora = _hora_registro_decimal(
+        registro
+    )
+
+    if hora is None:
+        return False
+
+    return (
+        hora >= inicio_h
+        and hora < fin_h
+    )
+
+
+def _agrupar_horas_activas(
+    registros_activos,
+):
+    """
+    Agrupa registros horarios consecutivos en ventanas.
+
+    Cada registro AEMET representa aproximadamente una hora.
+    """
+
+    if not registros_activos:
+        return []
+
+    ordenados = sorted(
+        registros_activos,
+        key=lambda r: _hora_registro_decimal(
+            r
+        ),
+    )
+
+    grupos = []
+
+    grupo_actual = [
+        ordenados[
+            0
+        ]
+    ]
+
+    for registro in ordenados[
+        1:
+    ]:
+
+        hora_anterior = (
+            _hora_registro_decimal(
+                grupo_actual[
+                    -1
+                ]
+            )
+        )
+
+        hora_actual = (
+            _hora_registro_decimal(
+                registro
+            )
+        )
+
+        if (
+            hora_anterior is not None
+            and hora_actual is not None
+            and hora_actual
+            - hora_anterior
+            <= 1.01
+        ):
+
+            grupo_actual.append(
+                registro
+            )
+
+        else:
+
+            grupos.append(
+                grupo_actual
+            )
+
+            grupo_actual = [
+                registro
+            ]
+
+    grupos.append(
+        grupo_actual
+    )
+
+    resultado = []
+
+    for grupo in grupos:
+
+        hora_inicio = (
+            _hora_registro_decimal(
+                grupo[
+                    0
+                ]
+            )
+        )
+
+        hora_fin = (
+            _hora_registro_decimal(
+                grupo[
+                    -1
+                ]
+            )
+            + 1.0
+        )
+
+        temperaturas = [
+            _temperatura_horaria(
+                r
+            )
+            for r in grupo
+        ]
+
+        temperaturas = [
+            t
+            for t in temperaturas
+            if t is not None
+        ]
+
+        resultado.append(
+            {
+                "hora_inicio": decimal_a_hora(
+                    hora_inicio
+                ),
+
+                "hora_fin": decimal_a_hora(
+                    hora_fin
+                ),
+
+                "temperatura_min": (
+                    min(
+                        temperaturas
+                    )
+                    if temperaturas
+                    else None
+                ),
+
+                "temperatura_max": (
+                    max(
+                        temperaturas
+                    )
+                    if temperaturas
+                    else None
+                ),
+
+                "registros": grupo,
+            }
+        )
+
+    return resultado
+
+
+def decidir_climatizacion_verano_horaria(
+    nombre_servicio,
+    registros_dia,
+):
+    """
+    Calcula ventanas de refrigeración usando temperatura horaria.
+
+    Se respeta la estrategia doméstica definida:
+
+        - ventilación nocturna;
+        - cierre de ventanas aproximadamente a las 11:00;
+        - climatización únicamente durante el periodo diurno;
+        - apagado alrededor de las 18:00.
+
+    Para la vivienda general:
+        encendido si T exterior >= 30 °C.
+
+    Para la despensa:
+        encendido si T exterior >= 27 °C.
+
+    Los umbrales son parámetros iniciales y posteriormente
+    deberán trasladarse a config.py.
+    """
+
+    nombre = nombre_servicio.lower()
+
+    es_despensa = (
+        "despensa"
+        in nombre
+    )
+
+    if es_despensa:
+
+        temperatura_encendido = 27.0
+
+    else:
+
+        temperatura_encendido = 30.0
+
+    # Ventana compatible con el régimen de verano de la vivienda.
+    hora_inicio_operacion = 12.0
+    hora_fin_operacion = 18.0
+
+    candidatos = []
+
+    for registro in registros_dia:
+
+        if not _registro_en_ventana(
+            registro,
+            hora_inicio_operacion,
+            hora_fin_operacion,
+        ):
+            continue
+
+        temperatura = (
+            _temperatura_horaria(
+                registro
+            )
+        )
+
+        if temperatura is None:
+            continue
+
+        if temperatura >= temperatura_encendido:
+
+            candidatos.append(
+                registro
+            )
+
+    ventanas = (
+        _agrupar_horas_activas(
+            candidatos
+        )
+    )
+
+    resultado = []
+
+    for ventana in ventanas:
+
+        tmax = ventana[
+            "temperatura_max"
+        ]
+
+        if tmax is None:
+
+            nivel = "media"
+
+        elif (
+            es_despensa
+            and tmax >= 34.0
+        ):
+
+            nivel = "alta"
+
+        elif (
+            not es_despensa
+            and tmax >= 35.0
+        ):
+
+            nivel = "alta"
+
+        elif tmax >= 31.0:
+
+            nivel = "media"
+
+        else:
+
+            nivel = "suave"
+
+        resultado.append(
+            (
+                ventana[
+                    "hora_inicio"
+                ],
+
+                ventana[
+                    "hora_fin"
+                ],
+
+                nivel,
+
+                (
+                    "Ventana calculada con temperatura horaria AEMET. "
+                    f"Umbral de encendido = "
+                    f"{temperatura_encendido:.1f} °C."
+                ),
+
+                ventana[
+                    "temperatura_min"
+                ],
+
+                ventana[
+                    "temperatura_max"
+                ],
+            )
+        )
+
+    return resultado
+
+
+def decidir_climatizacion_invierno_horaria(
+    registros_dia,
+):
+    """
+    Calcula ventanas de calefacción usando temperatura horaria AEMET.
+
+    Se consideran las ventanas domésticas habituales:
+
+        mañana: 07:00-09:00
+        tarde : 18:00-22:00
+
+    Se recomienda calefacción cuando la temperatura exterior
+    prevista es <= 12 °C.
+
+    La temperatura interior y la inercia térmica se incorporarán
+    en una versión posterior.
+    """
+
+    temperatura_encendido = 12.0
+
+    ventanas_operacion = [
+        (
+            7.0,
+            9.0,
+        ),
+        (
+            18.0,
+            22.0,
+        ),
+    ]
+
+    resultado = []
+
+    for (
+        inicio_operacion,
+        fin_operacion,
+    ) in ventanas_operacion:
+
+        candidatos = []
+
+        for registro in registros_dia:
+
+            if not _registro_en_ventana(
+                registro,
+                inicio_operacion,
+                fin_operacion,
+            ):
+                continue
+
+            temperatura = (
+                _temperatura_horaria(
+                    registro
+                )
+            )
+
+            if temperatura is None:
+                continue
+
+            if temperatura <= temperatura_encendido:
+
+                candidatos.append(
+                    registro
+                )
+
+        ventanas = (
+            _agrupar_horas_activas(
+                candidatos
+            )
+        )
+
+        for ventana in ventanas:
+
+            tmin = ventana[
+                "temperatura_min"
+            ]
+
+            if tmin is None:
+
+                nivel = "media"
+
+            elif tmin <= 3.0:
+
+                nivel = "alta"
+
+            elif tmin <= 7.0:
+
+                nivel = "media"
+
+            else:
+
+                nivel = "suave"
+
+            resultado.append(
+                (
+                    ventana[
+                        "hora_inicio"
+                    ],
+
+                    ventana[
+                        "hora_fin"
+                    ],
+
+                    nivel,
+
+                    (
+                        "Ventana calculada con temperatura horaria AEMET. "
+                        f"Umbral de calefacción = "
+                        f"{temperatura_encendido:.1f} °C."
+                    ),
+
+                    ventana[
+                        "temperatura_min"
+                    ],
+
+                    ventana[
+                        "temperatura_max"
+                    ],
+                )
+            )
+
+    return resultado
+
+
 def planificar_cargas_termicas(
     servicios,
     prevision,
     estacion,
+    prevision_horaria=None,
 ):
     """
-    Genera ventanas orientativas para climatización.
+    Genera la planificación semanal de climatización.
 
-    La climatización no se trata como una tarea puntual.
+    Estrategia híbrida de la versión 4
+    ----------------------------------
+
+    Para los dos primeros días del horizonte, siempre que existan
+    registros AEMET horarios:
+
+        -> se utiliza temperatura horaria.
+
+    Para el resto de la semana:
+
+        -> se utiliza Tmax/Tmin diaria.
+
+    Esto evita atribuir precisión horaria a predicciones lejanas
+    y mantiene la planificación semanal completa.
     """
 
     resultado = []
@@ -1259,6 +2215,22 @@ def planificar_cargas_termicas(
             "tipo"
         ] == "termica"
     ]
+
+    indice_horario = (
+        indexar_prevision_horaria_por_fecha(
+            prevision_horaria
+        )
+    )
+
+    # Fechas para las que queremos máxima resolución.
+    fechas_alta_resolucion = {
+        dia[
+            "fecha"
+        ]
+        for dia in prevision[
+            :2
+        ]
+    }
 
     for servicio in servicios_termicos:
 
@@ -1288,59 +2260,365 @@ def planificar_cargas_termicas(
                 )
             )
 
+            (
+                tmax,
+                tmin,
+            ) = obtener_temperaturas_aemet_dia(
+                dia
+            )
+
+            registros_horarios_dia = (
+                indice_horario.get(
+                    fecha,
+                    []
+                )
+            )
+
+            usar_horaria = (
+                fecha
+                in fechas_alta_resolucion
+                and bool(
+                    registros_horarios_dia
+                )
+            )
+
+            # ==================================================
+            # Primeras 48 horas: AEMET horario
+            # ==================================================
+
+            if usar_horaria:
+
+                if estacion == "verano":
+
+                    ventanas_h = (
+                        decidir_climatizacion_verano_horaria(
+                            servicio[
+                                "nombre"
+                            ],
+                            registros_horarios_dia,
+                        )
+                    )
+
+                else:
+
+                    ventanas_h = (
+                        decidir_climatizacion_invierno_horaria(
+                            registros_horarios_dia
+                        )
+                    )
+
+                temperatura_control = (
+                    "aemet_horario"
+                )
+
+                fuente_temperatura = (
+                    "AEMET_horario"
+                )
+
+                if not ventanas_h:
+
+                    temperaturas_disponibles = [
+                        _temperatura_horaria(
+                            r
+                        )
+                        for r in registros_horarios_dia
+                    ]
+
+                    temperaturas_disponibles = [
+                        t
+                        for t in temperaturas_disponibles
+                        if t is not None
+                    ]
+
+                    resultado.append(
+                        {
+                            "servicio": servicio[
+                                "nombre"
+                            ],
+
+                            "descripcion": servicio[
+                                "descripcion"
+                            ],
+
+                            "tipo": "termica",
+
+                            "fecha": fecha,
+
+                            "dia_semana": nombre_dia_semana(
+                                fecha
+                            ),
+
+                            "hora_inicio": None,
+
+                            "hora_fin": None,
+
+                            "activo_recomendado": False,
+
+                            "nivel_climatizacion": "no_necesaria",
+
+                            "tmax_aemet": tmax,
+
+                            "tmin_aemet": tmin,
+
+                            "temperatura_horaria_min": (
+                                min(
+                                    temperaturas_disponibles
+                                )
+                                if temperaturas_disponibles
+                                else None
+                            ),
+
+                            "temperatura_horaria_max": (
+                                max(
+                                    temperaturas_disponibles
+                                )
+                                if temperaturas_disponibles
+                                else None
+                            ),
+
+                            "temperatura_control": (
+                                temperatura_control
+                            ),
+
+                            "fuente_temperatura": (
+                                fuente_temperatura
+                            ),
+
+                            "score_solar": score,
+
+                            "confianza": confianza_por_horizonte(
+                                indice
+                            ),
+
+                            "motivo": (
+                                "La temperatura horaria exterior prevista "
+                                "por AEMET no alcanza el umbral de "
+                                "climatización dentro de la ventana "
+                                "operativa."
+                            ),
+                        }
+                    )
+
+                    continue
+
+                for (
+                    inicio,
+                    fin,
+                    nivel,
+                    estrategia,
+                    temp_min_h,
+                    temp_max_h,
+                ) in ventanas_h:
+
+                    resultado.append(
+                        {
+                            "servicio": servicio[
+                                "nombre"
+                            ],
+
+                            "descripcion": servicio[
+                                "descripcion"
+                            ],
+
+                            "tipo": "termica",
+
+                            "fecha": fecha,
+
+                            "dia_semana": nombre_dia_semana(
+                                fecha
+                            ),
+
+                            "hora_inicio": inicio,
+
+                            "hora_fin": fin,
+
+                            "activo_recomendado": True,
+
+                            "nivel_climatizacion": nivel,
+
+                            "tmax_aemet": tmax,
+
+                            "tmin_aemet": tmin,
+
+                            "temperatura_horaria_min": temp_min_h,
+
+                            "temperatura_horaria_max": temp_max_h,
+
+                            "temperatura_control": (
+                                temperatura_control
+                            ),
+
+                            "fuente_temperatura": (
+                                fuente_temperatura
+                            ),
+
+                            "score_solar": score,
+
+                            "confianza": confianza_por_horizonte(
+                                indice
+                            ),
+
+                            "motivo": estrategia,
+                        }
+                    )
+
+                continue
+
+            # ==================================================
+            # Días 3-7: predicción diaria
+            # ==================================================
+
             if estacion == "verano":
 
-                inicio = "12:00"
-                fin = "18:00"
+                ventanas = (
+                    decidir_climatizacion_verano(
+                        servicio[
+                            "nombre"
+                        ],
+                        tmax,
+                    )
+                )
 
-                estrategia = (
-                    "Climatizar durante la ventana solar. "
-                    "Aprovechar FV directa y evitar funcionamiento "
-                    "nocturno siempre que el confort lo permita."
+                temperatura_control = (
+                    "tmax"
                 )
 
             else:
 
-                inicio = "18:00"
-                fin = "22:00"
-
-                estrategia = (
-                    "Utilizar la bomba de calor en la ventana "
-                    "habitual de ocupación. Considerar "
-                    "precalentamiento solar si existe excedente."
+                ventanas = (
+                    decidir_climatizacion_invierno(
+                        tmax,
+                        tmin,
+                    )
                 )
 
-            resultado.append(
-                {
-                    "servicio": servicio[
-                        "nombre"
-                    ],
+                temperatura_control = (
+                    "tmin"
+                    if tmin is not None
+                    else "tmax_fallback"
+                )
 
-                    "descripcion": servicio[
-                        "descripcion"
-                    ],
-
-                    "tipo": "termica",
-
-                    "fecha": fecha,
-
-                    "dia_semana": nombre_dia_semana(
-                        fecha
-                    ),
-
-                    "hora_inicio": inicio,
-
-                    "hora_fin": fin,
-
-                    "score_solar": score,
-
-                    "confianza": confianza_por_horizonte(
-                        indice
-                    ),
-
-                    "motivo": estrategia,
-                }
+            fuente_temperatura = (
+                "AEMET_diario"
             )
+
+            if not ventanas:
+
+                resultado.append(
+                    {
+                        "servicio": servicio[
+                            "nombre"
+                        ],
+
+                        "descripcion": servicio[
+                            "descripcion"
+                        ],
+
+                        "tipo": "termica",
+
+                        "fecha": fecha,
+
+                        "dia_semana": nombre_dia_semana(
+                            fecha
+                        ),
+
+                        "hora_inicio": None,
+
+                        "hora_fin": None,
+
+                        "activo_recomendado": False,
+
+                        "nivel_climatizacion": "no_necesaria",
+
+                        "tmax_aemet": tmax,
+
+                        "tmin_aemet": tmin,
+
+                        "temperatura_horaria_min": None,
+
+                        "temperatura_horaria_max": None,
+
+                        "temperatura_control": (
+                            temperatura_control
+                        ),
+
+                        "fuente_temperatura": (
+                            fuente_temperatura
+                        ),
+
+                        "score_solar": score,
+
+                        "confianza": confianza_por_horizonte(
+                            indice
+                        ),
+
+                        "motivo": (
+                            "La temperatura diaria prevista por AEMET "
+                            "no justifica climatización programada."
+                        ),
+                    }
+                )
+
+                continue
+
+            for (
+                inicio,
+                fin,
+                nivel,
+                estrategia,
+            ) in ventanas:
+
+                resultado.append(
+                    {
+                        "servicio": servicio[
+                            "nombre"
+                        ],
+
+                        "descripcion": servicio[
+                            "descripcion"
+                        ],
+
+                        "tipo": "termica",
+
+                        "fecha": fecha,
+
+                        "dia_semana": nombre_dia_semana(
+                            fecha
+                        ),
+
+                        "hora_inicio": inicio,
+
+                        "hora_fin": fin,
+
+                        "activo_recomendado": True,
+
+                        "nivel_climatizacion": nivel,
+
+                        "tmax_aemet": tmax,
+
+                        "tmin_aemet": tmin,
+
+                        "temperatura_horaria_min": None,
+
+                        "temperatura_horaria_max": None,
+
+                        "temperatura_control": (
+                            temperatura_control
+                        ),
+
+                        "fuente_temperatura": (
+                            fuente_temperatura
+                        ),
+
+                        "score_solar": score,
+
+                        "confianza": confianza_por_horizonte(
+                            indice
+                        ),
+
+                        "motivo": estrategia,
+                    }
+                )
 
     return resultado
 
@@ -1702,6 +2980,10 @@ def construir_resumen_dias(
                     "tmax"
                 ),
 
+                "temperatura_min": dia.get(
+                    "tmin"
+                ),
+
                 "confianza": confianza_por_horizonte(
                     indice
                 ),
@@ -1720,6 +3002,7 @@ def generar_plan_semanal(
     prevision_semanal,
     estacion=None,
     horizonte_dias=HORIZONTE_DIAS_DEFAULT,
+    prevision_horaria=None,
 ):
     """
     Genera un plan semanal coordinado de servicios.
@@ -1812,6 +3095,7 @@ def generar_plan_semanal(
         servicios=servicios,
         prevision=prevision,
         estacion=estacion,
+        prevision_horaria=prevision_horaria,
     )
 
     # ------------------------------------------------------
@@ -1842,7 +3126,7 @@ def generar_plan_semanal(
     )
 
     return {
-        "version": 2,
+        "version": 4,
 
         "estacion": estacion,
 
@@ -1910,22 +3194,46 @@ def mostrar_plan_semanal(
         f"{'Día':<12}"
         f"{'Fecha':<12}"
         f"{'Solar':>8}"
+        f"{'Tmax':>8}"
+        f"{'Tmin':>8}"
         f"{'Calidad':>12}"
         f"{'Confianza':>12}"
     )
 
     print(
-        "-" * 56
+        "-" * 72
     )
 
     for dia in plan[
         "dias"
     ]:
 
+        tmax = dia.get(
+            "temperatura_max"
+        )
+
+        tmin = dia.get(
+            "temperatura_min"
+        )
+
+        tmax_txt = (
+            f"{tmax:.0f}"
+            if tmax is not None
+            else "-"
+        )
+
+        tmin_txt = (
+            f"{tmin:.0f}"
+            if tmin is not None
+            else "-"
+        )
+
         print(
             f"{dia['dia_semana']:<12}"
             f"{dia['fecha'].strftime('%d/%m/%Y'):<12}"
             f"{dia['score_solar']:>8.2f}"
+            f"{tmax_txt:>8}"
+            f"{tmin_txt:>8}"
             f"{dia['calidad_solar']:>12}"
             f"{dia['confianza']:>12}"
         )
@@ -1989,12 +3297,91 @@ def mostrar_plan_semanal(
             "termicas"
         ]:
 
+            tmax = entrada.get(
+                "tmax_aemet"
+            )
+
+            tmin = entrada.get(
+                "tmin_aemet"
+            )
+
+            temperaturas = []
+
+            if tmax is not None:
+                temperaturas.append(
+                    f"Tmax {tmax:.1f} °C"
+                )
+
+            if tmin is not None:
+                temperaturas.append(
+                    f"Tmin {tmin:.1f} °C"
+                )
+
+            fuente = entrada.get(
+                "fuente_temperatura",
+                "AEMET_diario",
+            )
+
+            temp_h_min = entrada.get(
+                "temperatura_horaria_min"
+            )
+
+            temp_h_max = entrada.get(
+                "temperatura_horaria_max"
+            )
+
+            if (
+                fuente == "AEMET_horario"
+                and temp_h_min is not None
+                and temp_h_max is not None
+            ):
+
+                texto_temperatura = (
+                    f"Thor {temp_h_min:.1f}–"
+                    f"{temp_h_max:.1f} °C"
+                )
+
+            else:
+
+                texto_temperatura = (
+                    ", ".join(
+                        temperaturas
+                    )
+                    if temperaturas
+                    else "temperatura no disponible"
+                )
+
+            if entrada.get(
+                "activo_recomendado",
+                True,
+            ):
+
+                horario = (
+                    f"{entrada['hora_inicio']}–"
+                    f"{entrada['hora_fin']}"
+                )
+
+                decision = (
+                    f"CLIMATIZAR ({entrada.get('nivel_climatizacion', 'normal')})"
+                )
+
+            else:
+
+                horario = "—"
+                decision = "NO CLIMATIZAR"
+
             print(
                 f"{entrada['dia_semana']} "
                 f"{entrada['fecha'].strftime('%d/%m/%Y')} | "
                 f"{entrada['servicio']} | "
-                f"{entrada['hora_inicio']}–"
-                f"{entrada['hora_fin']}"
+                f"{texto_temperatura} | "
+                f"{horario} | "
+                f"{decision} | "
+                f"{fuente}"
+            )
+
+            print(
+                f"  Motivo: {entrada['motivo']}"
             )
 
     # ======================================================
@@ -2087,6 +3474,10 @@ if __name__ == "__main__":
         obtener_prevision_solar,
     )
 
+    from aemet_hourly import (
+        obtener_prevision_horaria,
+    )
+
     configuracion = (
         obtener_configuracion_sistema()
     )
@@ -2107,9 +3498,38 @@ if __name__ == "__main__":
         municipio
     )
 
+    # ------------------------------------------------------
+    # Predicción horaria para las primeras ~48 horas
+    # ------------------------------------------------------
+    #
+    # Si AEMET horario falla temporalmente, el plan semanal
+    # sigue funcionando con la predicción diaria.
+
+    try:
+
+        prevision_horaria = (
+            obtener_prevision_horaria(
+                municipio
+            )
+        )
+
+    except Exception as error:
+
+        print(
+            "Aviso: no se pudo obtener AEMET horario. "
+            "Se utilizará planificación térmica diaria."
+        )
+
+        print(
+            f"Detalle: {error}"
+        )
+
+        prevision_horaria = []
+
     plan = generar_plan_semanal(
         demanda=demanda,
         prevision_semanal=prevision,
+        prevision_horaria=prevision_horaria,
     )
 
     mostrar_plan_semanal(

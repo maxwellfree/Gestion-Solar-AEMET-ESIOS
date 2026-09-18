@@ -102,6 +102,14 @@ from dotenv import load_dotenv
 
 from municipios import MUNICIPIOS
 
+# La caché evita repetir durante el mismo día consultas idénticas a AEMET.
+# Guardamos la respuesta bruta de AEMET y procesamos después sus datos horarios.
+from cache import (
+    get_cache,
+    make_key,
+    set_cache,
+)
+
 
 # ==========================================================
 # Archivo de claves
@@ -1042,30 +1050,85 @@ def procesar_dia(
 
 def obtener_prevision_horaria(
     municipio: str,
+    refresh: bool = False,
 ) -> List[Dict[str, Any]]:
     """
     Obtiene la predicción horaria procesada para un municipio.
+
+    La respuesta bruta de AEMET se conserva en una caché diaria. Esto evita
+    repetir las dos peticiones HTTP necesarias cada vez que se ejecuta el
+    programa y, además, permite conservar la predicción original para futuras
+    tareas de validación.
+
+    Con ``refresh=False`` se intenta utilizar primero la caché. Con
+    ``refresh=True`` se ignora la copia existente y se solicita una nueva
+    predicción a AEMET.
 
     Parameters
     ----------
     municipio : str
         Nombre o código municipal.
 
+    refresh : bool, optional
+        Si es True, fuerza una nueva consulta a AEMET.
+        Por defecto es False.
+
     Returns
     -------
     list
         Registros horarios ordenados cronológicamente.
+
+    Notes
+    -----
+    Se almacena el JSON bruto devuelto por AEMET antes de aplicar
+    ``procesar_dia()``. Por tanto, si en el futuro cambia nuestro cálculo del
+    factor meteorológico, podremos reprocesar la predicción histórica original.
     """
 
+    # Normalizamos primero el municipio a su código oficial. De esta forma
+    # distintas formas de referirse al mismo municipio comparten caché.
     codigo = obtener_codigo_municipio(
         municipio
     )
 
-    forecast = fetch_forecast_hourly(
-        codigo,
-        AEMET_API_KEY,
+    # La clave identifica la petición. cache.py añade por separado la fecha
+    # diaria, por lo que no es necesario incorporarla aquí.
+    clave_cache = make_key(
+        "aemet",
+        "prediccion_horaria",
+        municipio=codigo,
     )
 
+    # Si existe una entrada válida para hoy se reutiliza. Si el usuario ha
+    # indicado --refresh, get_cache() devuelve None y obliga a descargar.
+    forecast = get_cache(
+        clave_cache,
+        refresh=refresh,
+    )
+
+    if forecast is None:
+
+        # Esta función realiza las dos peticiones propias de AEMET OpenData:
+        # primero obtiene la URL temporal y después descarga el JSON real.
+        forecast = fetch_forecast_hourly(
+            codigo,
+            AEMET_API_KEY,
+        )
+
+        # fetch_forecast_hourly() ya valida que AEMET haya devuelto una lista
+        # no vacía. Sólo después de una descarga correcta actualizamos caché.
+        set_cache(
+            clave_cache,
+            forecast,
+            metadata={
+                "provider": "AEMET OpenData",
+                "request": "prediccion_horaria",
+                "municipio": codigo,
+            },
+        )
+
+    # A partir de aquí no importa si forecast procede de Internet o del disco:
+    # el procesamiento meteorológico es exactamente el mismo.
     dias = (
         forecast.get(
             "prediccion",
