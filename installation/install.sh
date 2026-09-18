@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Gestión Solar Predictiva — instalador Linux (v3)
+# Gestión Solar Predictiva — instalador Linux (v4.1)
 #
 # Detecta automáticamente:
 #   - distribución y versión de Linux
@@ -19,6 +19,18 @@
 
 set -Eeuo pipefail
 
+# El proyecto, las credenciales, el entorno virtual y la caché deben pertenecer
+# al usuario que ejecutará Gestión Solar Predictiva. Ejecutar todo el instalador
+# con sudo produciría archivos propiedad de root y problemas posteriores de
+# permisos. El propio script solicitará sudo únicamente si necesita reparar
+# paquetes del sistema (por ejemplo pythonX.Y-venv).
+if [[ "$(id -u)" -eq 0 ]]; then
+    printf 'ERROR: no ejecute este instalador completo con sudo.\n' >&2
+    printf 'Use simplemente:\n\n' >&2
+    printf '    ./installation/install.sh\n\n' >&2
+    exit 1
+fi
+
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 PROJECT_DIR="$(cd -- "${SCRIPT_DIR}/.." >/dev/null 2>&1 && pwd)"
 
@@ -33,6 +45,11 @@ GITIGNORE="${PROJECT_DIR}/.gitignore"
 WIZARD="${PROJECT_DIR}/installation/wizard.py"
 CURRENT_REQUIREMENTS="${PROJECT_DIR}/requirements.txt"
 LEGACY_REQUIREMENTS="${PROJECT_DIR}/installation/requirements-legacy.txt"
+CACHE_MODULE="${PROJECT_DIR}/cache.py"
+AEMET_MODULE="${PROJECT_DIR}/aemet.py"
+AEMET_HOURLY_MODULE="${PROJECT_DIR}/aemet_hourly.py"
+ESIOS_MODULE="${PROJECT_DIR}/esios.py"
+MAIN_MODULE="${PROJECT_DIR}/main.py"
 
 bold()   { printf '\033[1m%s\033[0m\n' "$*"; }
 green()  { printf '\033[32m%s\033[0m\n' "$*"; }
@@ -66,6 +83,13 @@ command_status() {
 
 ensure_gitignore_entry() {
     local entry="$1"
+
+    # .gitignore es un archivo, no una carpeta. Detectamos expresamente este
+    # error para evitar los mensajes poco claros de touch/grep.
+    if [[ -d "${GITIGNORE}" ]]; then
+        die "${GITIGNORE} existe como directorio. .gitignore debe ser un archivo."
+    fi
+
     touch "${GITIGNORE}"
     if ! grep -Fxq "${entry}" "${GITIGNORE}"; then
         printf '%s\n' "${entry}" >> "${GITIGNORE}"
@@ -77,7 +101,7 @@ clear 2>/dev/null || true
 cat <<'EOF'
 ============================================================
               GESTIÓN SOLAR PREDICTIVA
-              Instalador Linux v3
+              Instalador Linux v4.1
 ============================================================
 
 El instalador detectará automáticamente el software disponible y
@@ -295,12 +319,39 @@ EOF
     green "✓ mytoken.env creado con permisos 600."
 fi
 
+# Aseguramos que el archivo de credenciales pertenece al usuario actual y no
+# ha quedado accidentalmente creado por root en una ejecución anterior.
+if [[ -f "${TOKEN_FILE}" ]]; then
+    TOKEN_OWNER="$(stat -c '%U' "${TOKEN_FILE}" 2>/dev/null || true)"
+    CURRENT_USER="$(id -un)"
+
+    if [[ -n "${TOKEN_OWNER}" && "${TOKEN_OWNER}" != "${CURRENT_USER}" ]]; then
+        cat <<EOF
+
+ERROR: ${TOKEN_FILE} pertenece a '${TOKEN_OWNER}' y el usuario actual es
+'${CURRENT_USER}'.
+
+Corrija la propiedad con:
+
+    sudo chown $(id -un):$(id -gn) "${TOKEN_FILE}"
+    chmod 600 "${TOKEN_FILE}"
+
+y vuelva a ejecutar el instalador.
+
+EOF
+        exit 1
+    fi
+
+    chmod 600 "${TOKEN_FILE}" || die         "No se pudieron establecer permisos 600 en ${TOKEN_FILE}."
+fi
+
 ensure_gitignore_entry "mytoken.env"
 ensure_gitignore_entry "config.yaml"
 ensure_gitignore_entry ".venv/"
 ensure_gitignore_entry "__pycache__/"
 ensure_gitignore_entry "*.pyc"
-green "✓ .gitignore comprobado."
+ensure_gitignore_entry "cache/"
+green "✓ .gitignore comprobado (incluida la caché local)."
 
 # ---------------------------------------------------------------------------
 # PASO 4 — Crear/recrear venv si cambió Python
@@ -343,10 +394,88 @@ if [[ "${RECREATE_VENV}" == true ]]; then
     yellow "Entorno anterior conservado como .venv.bak.${stamp}"
 fi
 
-if [[ ! -x "${VENV_DIR}/bin/python" ]]; then
+create_venv_with_repair() {
     printf 'Creando .venv con %s...\n' "${PYTHON_BIN}"
-    "${PYTHON_BIN}" -m venv "${VENV_DIR}"
-    green "✓ Entorno virtual creado."
+
+    # IMPORTANTE: con "set -e", ejecutar directamente "python -m venv" haría
+    # terminar el instalador si ensurepip no está disponible. Al ejecutarlo
+    # dentro de este if podemos capturar el fallo y repararlo.
+    if "${PYTHON_BIN}" -m venv "${VENV_DIR}" >/tmp/gestion_solar_venv.log 2>&1; then
+        green "✓ Entorno virtual creado."
+        return 0
+    fi
+
+    cat /tmp/gestion_solar_venv.log >&2 || true
+    rm -rf "${VENV_DIR}" 2>/dev/null || true
+
+    printf '\n'
+    yellow "No se ha podido crear un entorno virtual completo."
+
+    if [[ "${OS_ID}" == "ubuntu" || "${OS_ID}" == "debian" ]]; then
+        VENV_PACKAGE="python${PYTHON_MAJOR}.${PYTHON_MINOR}-venv"
+
+        printf 'Paquete necesario/recomendado: %s\n' "${VENV_PACKAGE}"
+
+        if command -v dpkg >/dev/null 2>&1 && dpkg -s "${VENV_PACKAGE}" >/dev/null 2>&1; then
+            APT_ACTION="reinstalar"
+            yellow "${VENV_PACKAGE} figura instalado; se propone reinstalarlo."
+        else
+            APT_ACTION="instalar"
+        fi
+
+        read -r -p "¿Desea que el instalador intente ${APT_ACTION} ${VENV_PACKAGE} con sudo? [S/n]: " fix_venv
+        fix_venv="${fix_venv:-S}"
+
+        if [[ "${fix_venv}" =~ ^[Nn]$ ]]; then
+            cat <<EOF
+
+Para continuar manualmente:
+
+    sudo apt update
+    sudo apt install ${VENV_PACKAGE}
+
+Después vuelva a ejecutar:
+
+    ./installation/install.sh
+
+EOF
+            die "No se puede continuar sin un entorno virtual funcional."
+        fi
+
+        command -v sudo >/dev/null 2>&1 || die \
+            "No se encuentra sudo. Instale manualmente ${VENV_PACKAGE}."
+        command -v apt-get >/dev/null 2>&1 || die \
+            "No se encuentra apt-get. Instale manualmente ${VENV_PACKAGE}."
+
+        printf '\nActualizando índices de paquetes...\n'
+        sudo apt-get update || die "apt-get update ha fallado."
+
+        printf '\nIntentando %s %s...\n' "${APT_ACTION}" "${VENV_PACKAGE}"
+        if [[ "${APT_ACTION}" == "reinstalar" ]]; then
+            sudo apt-get install --reinstall -y "${VENV_PACKAGE}" || \
+                die "No se pudo reinstalar ${VENV_PACKAGE}."
+        else
+            sudo apt-get install -y "${VENV_PACKAGE}" || \
+                die "No se pudo instalar ${VENV_PACKAGE}."
+        fi
+
+        printf '\nReintentando la creación de .venv...\n'
+        rm -rf "${VENV_DIR}" 2>/dev/null || true
+
+        if ! "${PYTHON_BIN}" -m venv "${VENV_DIR}"; then
+            rm -rf "${VENV_DIR}" 2>/dev/null || true
+            die "El entorno virtual sigue sin poder crearse después de reparar ${VENV_PACKAGE}."
+        fi
+
+        green "✓ Entorno virtual creado correctamente tras reparar venv."
+        return 0
+    fi
+
+    die "No se pudo crear .venv. Instale el paquete venv/ensurepip correspondiente a su distribución."
+}
+
+if [[ ! -x "${VENV_DIR}/bin/python" ]]; then
+    create_venv_with_repair
 fi
 
 VENV_PYTHON="${VENV_DIR}/bin/python"
@@ -471,11 +600,31 @@ print("✓ python-dotenv importado correctamente")
 PY
 
 # ---------------------------------------------------------------------------
-# PASO 6 — Wizard
+# PASO 6 — Validación del código y Wizard
 # ---------------------------------------------------------------------------
 
 printf '\n'
-bold "PASO 6/6 — Configuración de la instalación"
+bold "PASO 6/6 — Validación y configuración de la instalación"
+printf '\n'
+
+# La caché forma parte del código de adquisición. No creamos aquí el directorio
+# cache/: cache.py lo hará automáticamente sólo cuando exista una respuesta
+# válida que almacenar.
+printf 'Comprobando módulos principales del proyecto...\n'
+
+for module in \
+    "${CACHE_MODULE}" \
+    "${AEMET_MODULE}" \
+    "${AEMET_HOURLY_MODULE}" \
+    "${ESIOS_MODULE}" \
+    "${MAIN_MODULE}"
+do
+    [[ -f "${module}" ]] || die "Falta el módulo requerido: ${module}"
+    "${VENV_PYTHON}" -m py_compile "${module}" ||         die "El módulo $(basename "${module}") no es compatible con Python ${PYTHON_VERSION}."
+    printf '  ✓ %s\n' "$(basename "${module}")"
+done
+
+green "✓ Código principal compatible con Python ${PYTHON_VERSION}."
 printf '\n'
 
 if [[ -f "${WIZARD}" ]]; then
@@ -523,6 +672,21 @@ Para ejecutar el programa:
     cd "${PROJECT_DIR}"
     source .venv/bin/activate
     python main.py --soc 0.60
+
+El programa reutiliza automáticamente la caché local de AEMET y ESIOS.
+
+Para forzar una nueva descarga de los datos externos:
+
+    python main.py --soc 0.60 --refresh
+
+La caché persistente se crea automáticamente, cuando sea necesaria, en:
+
+    ${PROJECT_DIR}/cache/
+
+No es necesario borrar la caché RAM: desaparece al terminar el proceso Python.
+Para eliminar manualmente la caché persistente:
+
+    rm -rf "${PROJECT_DIR}/cache"
 
 Para volver a configurar la instalación:
 
