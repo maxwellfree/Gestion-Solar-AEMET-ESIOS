@@ -1,124 +1,136 @@
 # Gestión Solar Predictiva --- Android
 
-Aplicación Android para **Gestion-Solar-AEMET-ESIOS**, construida sobre
-el motor Python existente del proyecto.
+> **Rama de desarrollo:** `android-app`\
+> **Objetivo:** proporcionar una aplicación Android instalable que
+> configure y ejecute el motor Python existente de
+> **Gestion-Solar-AEMET-ESIOS** y presente sus resultados de forma
+> clara, visual y explicable.
 
-La finalidad de esta rama es desarrollar una interfaz Android que
-permita configurar la instalación energética del usuario, gestionar las
-credenciales necesarias, ejecutar el modelo predictivo existente y
-presentar sus recomendaciones de forma clara y visual.
+![Diagrama general de la aplicación y del flujo de
+datos](docs/images/architecture-overview.png)
 
-> **Principio clave:** la aplicación Android configura, llama al motor
-> Python existente y muestra sus resultados. El objetivo no es
-> reprogramar en Kotlin el modelo energético.
+## 1. Objetivo del proyecto Android
+
+El proyecto existente ya contiene el núcleo de cálculo en Python. La
+tarea de `android-app` no consiste en reproducir esos algoritmos en
+Kotlin, sino en construir una capa móvil alrededor del motor existente.
+
+La aplicación debe permitir que un usuario, sin editar código ni
+archivos manualmente:
+
+1.  introduzca sus credenciales de AEMET y ESIOS;
+2.  configure su ubicación, instalación fotovoltaica, inversor, batería,
+    vivienda y cargas;
+3.  indique los datos variables necesarios para cada ejecución, como el
+    estado de carga de la batería (SOC);
+4.  ejecute el motor predictivo;
+5.  reciba recomendaciones para **hoy** y para los próximos días;
+6.  pueda entender **por qué** se recomienda cada acción.
+
+La primera versión será deliberadamente un **sistema de recomendación**.
+No enviará órdenes al inversor ni automatizará cargas domésticas.
 
 ------------------------------------------------------------------------
 
-## Arquitectura general
+## 2. Principio arquitectónico
 
-La arquitectura prevista separa claramente la interfaz móvil, el motor
-de cálculo y las fuentes externas de datos:
+> **Android configura → Python calcula → Android presenta.**
+
+La separación entre capas debe mantenerse durante todo el desarrollo:
 
 ``` text
-Aplicación Android
-Kotlin + Jetpack Compose
-        │
-        │ configuración / credenciales / SOC
-        ▼
-Adaptador Android ↔ Python
-        │
-        ▼
-Motor Python existente
-        │
-        ├── AEMET OpenData
-        ├── PVGIS
-        └── ESIOS / Red Eléctrica
-        │
-        ▼
-Resultados estructurados
-        │
-        ▼
-Android: recomendaciones, planificación y gráficos
+┌─────────────────────────────────────────────┐
+│              APLICACIÓN ANDROID             │
+│        Kotlin + Jetpack Compose             │
+│                                             │
+│  configuración · credenciales · SOC · UI    │
+└──────────────────────┬──────────────────────┘
+                       │
+                       ▼
+┌─────────────────────────────────────────────┐
+│           ADAPTADOR ANDROID ↔ PYTHON        │
+│                                             │
+│  entrada estructurada → run_plan(...)       │
+│  salida estructurada  ← dict / JSON         │
+└──────────────────────┬──────────────────────┘
+                       │
+                       ▼
+┌─────────────────────────────────────────────┐
+│              MOTOR PYTHON EXISTENTE         │
+│                                             │
+│  AEMET · PVGIS · ESIOS · demanda · balance  │
+│  batería · optimización · planificación     │
+└──────────────────────┬──────────────────────┘
+                       │
+                       ▼
+┌─────────────────────────────────────────────┐
+│             RESULTADOS PARA ANDROID         │
+│                                             │
+│  hoy · semana · energía · explicaciones     │
+└─────────────────────────────────────────────┘
 ```
 
-El motor Python conserva la responsabilidad sobre la meteorología,
-producción fotovoltaica, precios, demanda, balance energético, batería,
-optimización y planificación.
+La regla de diseño es:
+
+**UI ≠ algoritmo ≠ acceso a datos**
+
+Los algoritmos físicos y energéticos no deben terminar dispersos entre
+pantallas, `ViewModel` o componentes Compose.
 
 ------------------------------------------------------------------------
 
-## Documentación
+## 3. Documentación del desarrollador
 
-La documentación del desarrollo Android se divide en los siguientes
-documentos:
+Este `README.md` es el punto de entrada. La especificación se divide en
+documentos más concretos:
 
-### [1. Arquitectura](docs/ARCHITECTURE.md)
+  -------------------------------------------------------------------------------------------------------------------------------
+  Documento                                                                       Qué contiene            Cuándo consultarlo
+  ------------------------------------------------------------------------------- ----------------------- -----------------------
+  **[ARCHITECTURE.md](docs/ARCHITECTURE.md)**                                     Arquitectura            Antes de implementar la
+                                                                                  Android--Python,        integración
+                                                                                  responsabilidades y     
+                                                                                  contrato del adaptador  
 
-Describe la separación entre Android y Python, los módulos existentes y
-la capa de adaptación que debe permitir a Android ejecutar el motor sin
-depender de la salida de consola.
+  **[CONFIGURATION_AND_CREDENTIALS.md](docs/CONFIGURATION_AND_CREDENTIALS.md)**   Onboarding,             Al desarrollar
+                                                                                  configuración de        formularios y
+                                                                                  instalación y           persistencia
+                                                                                  tratamiento de secretos 
 
-### [2. Configuración y credenciales](docs/CONFIGURATION_AND_CREDENTIALS.md)
+  **[DATA_SOURCES.md](docs/DATA_SOURCES.md)**                                     AEMET, PVGIS, ESIOS y   Al conectar el motor
+                                                                                  política de caché       con datos reales
 
-Define el proceso de primera configuración:
+  **[UI_MVP.md](docs/UI_MVP.md)**                                                 Pantallas, navegación,  Al desarrollar la
+                                                                                  recomendaciones y       interfaz
+                                                                                  explicabilidad          
 
--   API Key de AEMET;
--   token de ESIOS;
--   ubicación;
--   instalación fotovoltaica;
--   inversor;
--   batería;
--   vivienda;
--   cargas;
--   estrategia de gestión.
+  **[DEVELOPMENT_PLAN.md](docs/DEVELOPMENT_PLAN.md)**                             Fases, entregables y    Para organizar el
+                                                                                  criterios de            trabajo
+                                                                                  finalización            
+  -------------------------------------------------------------------------------------------------------------------------------
 
-También establece los requisitos para el almacenamiento seguro de
-credenciales.
+### Ruta de lectura recomendada
 
-### [3. Fuentes de datos](docs/DATA_SOURCES.md)
-
-Describe las fuentes externas utilizadas por el proyecto:
-
--   **AEMET OpenData** --- previsión meteorológica;
--   **PVGIS** --- radiación y producción fotovoltaica;
--   **ESIOS / Red Eléctrica** --- precios y datos del sistema eléctrico;
--   caché local para evitar consultas innecesarias.
-
-### [4. Interfaz y MVP](docs/UI_MVP.md)
-
-Define las pantallas y la experiencia de usuario de la primera versión
-Android:
-
--   bienvenida;
--   credenciales;
--   configuración;
--   plan para hoy;
--   planificación semanal;
--   detalle y explicación de decisiones;
--   energía;
--   ajustes;
--   estado de los datos.
-
-La aplicación debe mostrar primero **qué conviene hacer** y después los
-datos que justifican la recomendación.
-
-### [5. Plan de desarrollo](docs/DEVELOPMENT_PLAN.md)
-
-Organiza el trabajo en fases:
-
-1.  integración Android--Python;
-2.  onboarding y configuración;
-3.  recomendaciones para hoy;
-4.  planificación semanal;
-5.  robustez, caché, errores y tests;
-6.  generación y distribución del APK/AAB.
+``` text
+README.md
+    ↓
+ARCHITECTURE.md
+    ↓
+CONFIGURATION_AND_CREDENTIALS.md
+    ↓
+DATA_SOURCES.md
+    ↓
+UI_MVP.md
+    ↓
+DEVELOPMENT_PLAN.md
+```
 
 ------------------------------------------------------------------------
 
-## Motor Python existente
+## 4. Componentes Python que se pretende reutilizar
 
-La intención es reutilizar los módulos existentes con las mínimas
-modificaciones necesarias.
+La documentación actual identifica los siguientes módulos como parte del
+motor existente.
 
 ### Acceso a datos
 
@@ -130,7 +142,16 @@ esios.py
 cache.py
 ```
 
-### Cálculo y optimización
+Responsabilidades previstas:
+
+``` text
+aemet.py / aemet_hourly.py  → meteorología
+solar.py                    → producción fotovoltaica / PVGIS
+esios.py                    → precios y datos del sistema eléctrico
+cache.py                    → caché local
+```
+
+### Cálculo y planificación
 
 ``` text
 balance.py
@@ -139,157 +160,398 @@ optimizer.py
 weekly.py
 ```
 
-Estos módulos no deben duplicarse en Kotlin salvo que exista una razón
-técnica documentada.
-
-------------------------------------------------------------------------
-
-## Adaptador Android--Python
-
-Android no debe interpretar texto generado por `main.py`.
-
-Debe existir una interfaz reutilizable que reciba la configuración y el
-estado actual y devuelva resultados estructurados. Conceptualmente:
-
-``` python
-run_plan(config, soc, refresh=False)
-```
-
-La respuesta deberá proporcionar datos estructurados para que Android
-pueda construir independientemente la presentación:
+Responsabilidades previstas:
 
 ``` text
-status
-warnings
-forecast
-demand
-energy
-today_actions
-weekly_plan
-updated_at
-cache_status
+balance.py    → balance energético
+dispatch.py   → gestión de batería y red
+optimizer.py  → optimización
+weekly.py     → planificación semanal
 ```
+
+### Configuración y demanda
+
+``` text
+config.yaml
+config.py
+demand.py
+```
+
+La interfaz Android debe recopilar la información del usuario y
+transformarla al formato que necesite el motor. No debe obligarse al
+usuario final a editar `config.yaml` o `demand.py` manualmente.
 
 ------------------------------------------------------------------------
 
-## Filosofía de la interfaz
+## 5. Contrato Android ↔ Python
 
-El usuario no debería necesitar interpretar gráficas complejas para
-decidir cuándo utilizar una carga.
+Una prioridad temprana del desarrollo es disponer de una entrada
+programática estable al motor.
 
-La aplicación debe poder producir recomendaciones del tipo:
+No se debe ejecutar `main.py` y después intentar interpretar texto
+impreso en consola. La interfaz debe recibir datos estructurados.
+
+La forma conceptual propuesta es:
+
+``` python
+def run_plan(config, soc, refresh=False):
+    ...
+    return result
+```
+
+También podría utilizarse una ruta de configuración:
+
+``` python
+def run_plan(config_path, soc, refresh=False):
+    ...
+    return result
+```
+
+La decisión concreta debe tomarse durante la fase de integración y, una
+vez fijada, mantenerse como contrato estable.
+
+### Entrada mínima prevista
+
+``` python
+{
+    "config": "...",      # objeto o ruta, según el contrato definitivo
+    "soc": 0.65,         # 0.0 ... 1.0
+    "refresh": False
+}
+```
+
+### Salida conceptual
+
+``` json
+{
+  "status": "ok",
+  "warnings": [],
+  "updated_at": "2026-09-21T10:30:00",
+  "cache_status": "valid",
+  "forecast": {},
+  "demand": {},
+  "energy": {},
+  "today_actions": [],
+  "weekly_plan": []
+}
+```
+
+El esquema anterior es **orientativo**: la estructura definitiva debe
+derivarse de los datos que realmente produzca el motor Python. No
+conviene inventar campos en Kotlin que el motor todavía no pueda
+proporcionar.
+
+------------------------------------------------------------------------
+
+## 6. Fuentes externas
+
+El motor utiliza tres familias principales de información externa.
+
+### AEMET OpenData
+
+Proporciona la información meteorológica necesaria para la predicción.
+
+![AEMET OpenData](docs/images/aemet-opendata.png)
+
+La aplicación debe permitir introducir la API Key obtenida por el
+usuario. El proceso de configuración se documenta en
+[CONFIGURATION_AND_CREDENTIALS.md](docs/CONFIGURATION_AND_CREDENTIALS.md).
+
+### PVGIS
+
+Se utiliza para la estimación fotovoltaica asociada a la localización y
+características de la instalación.
+
+![PVGIS --- Photovoltaic Geographical Information
+System](docs/images/pvgis.png)
+
+### ESIOS / Red Eléctrica
+
+Proporciona precios y otros datos del sistema eléctrico utilizados por
+el modelo.
+
+![ESIOS --- Red Eléctrica](docs/images/esios-dashboard.png)
+
+Los detalles sobre las tres fuentes y la caché están en
+[DATA_SOURCES.md](docs/DATA_SOURCES.md).
+
+------------------------------------------------------------------------
+
+## 7. Flujo de primera ejecución
+
+El usuario debería recorrer un asistente aproximadamente en este orden:
+
+``` text
+Bienvenida
+    ↓
+Credenciales
+    ├── AEMET API Key
+    └── ESIOS token
+    ↓
+Ubicación
+    ↓
+Instalación fotovoltaica
+    ↓
+Inversor
+    ↓
+Batería
+    ↓
+Vivienda
+    ↓
+Cargas
+    ↓
+Estrategia
+    ↓
+Validación
+    ↓
+Primer cálculo
+    ↓
+Pantalla «Hoy»
+```
+
+El objetivo es que un usuario nuevo pueda completar este proceso **sin
+editar código**.
+
+------------------------------------------------------------------------
+
+## 8. Qué debe mostrar primero la aplicación
+
+La interfaz no debe obligar al usuario a interpretar curvas para decidir
+qué hacer.
+
+La prioridad es:
+
+``` text
+1. Acción recomendada
+2. Cuándo realizarla
+3. Por qué
+4. Datos que justifican la decisión
+```
+
+Ejemplo conceptual:
 
 ``` text
 Lavadora
-Domingo · 12:00–15:00
 
 Recomendación:
-Esperar hasta el domingo.
+Esperar hasta el domingo, 12:00–15:00.
 
 Motivo:
-Se prevé un excedente fotovoltaico mayor y la carga es flexible.
+Se prevé mayor excedente fotovoltaico y la carga está
+configurada como flexible.
 ```
 
-Debe distinguirse siempre entre:
+Después pueden mostrarse producción FV, demanda, SOC, precios,
+importación/exportación y gráficas.
 
--   **datos observados**;
--   **predicciones**;
--   **recomendaciones**.
+La aplicación debe distinguir visual y semánticamente:
 
-Una recomendación no constituye una orden enviada al inversor.
+-   **dato observado**;
+-   **predicción**;
+-   **recomendación**.
 
 ------------------------------------------------------------------------
 
-## Alcance de la primera versión
+## 9. MVP
 
-El MVP debe permitir:
+La primera versión útil debe permitir:
 
--   instalar la aplicación sin editar código;
--   introducir y validar las credenciales AEMET y ESIOS;
--   configurar la instalación FV, batería y vivienda;
--   definir las cargas;
+-   instalar la aplicación mediante APK;
+-   introducir y conservar las credenciales necesarias;
+-   validar AEMET y ESIOS;
+-   configurar ubicación e instalación;
+-   configurar batería;
+-   configurar vivienda y cargas;
+-   proporcionar el SOC requerido por el cálculo;
+-   obtener datos externos;
 -   ejecutar el motor Python;
--   consultar las recomendaciones del día;
--   consultar la planificación semanal;
--   comprender por qué se recomienda cada acción;
--   actualizar los datos manualmente;
--   trabajar con caché cuando sea apropiado.
+-   mostrar un plan para hoy;
+-   mostrar planificación semanal;
+-   explicar las decisiones;
+-   reutilizar la caché cuando corresponda;
+-   forzar actualización de datos;
+-   manejar errores de red y API de forma comprensible.
 
-La primera versión será un **sistema de recomendación**. El control
-automático del inversor o de dispositivos domésticos queda fuera del
-alcance inicial.
+### Fuera del MVP
+
+No es necesario inicialmente:
+
+-   controlar directamente el inversor;
+-   activar/desactivar electrodomésticos;
+-   integrar Home Assistant;
+-   publicar en Google Play;
+-   construir un sistema avanzado de gráficas;
+-   reescribir el motor Python en Kotlin.
+
+Estas posibilidades pueden evaluarse después de validar el MVP.
 
 ------------------------------------------------------------------------
 
-## Rama de desarrollo
+## 10. Estructura documental de la rama
 
-El desarrollo Android se realiza en:
+La estructura inicial de documentación es:
+
+``` text
+android-app/
+│
+├── README.md
+│
+└── docs/
+    ├── ARCHITECTURE.md
+    ├── CONFIGURATION_AND_CREDENTIALS.md
+    ├── DATA_SOURCES.md
+    ├── UI_MVP.md
+    ├── DEVELOPMENT_PLAN.md
+    │
+    └── images/
+        ├── architecture-overview.png
+        ├── aemet-opendata.png
+        ├── aemet-api-key.png
+        ├── pvgis.png
+        ├── esios-dashboard.png
+        └── esios-token.png
+```
+
+A medida que se cree el proyecto Android, esta documentación deberá
+convivir con el código fuente y mantenerse sincronizada con las
+decisiones reales de implementación.
+
+------------------------------------------------------------------------
+
+## 11. Convenciones de trabajo en Git
+
+El desarrollo móvil se realiza en la rama:
 
 ``` text
 android-app
 ```
 
-La rama `main` contiene la versión principal del proyecto y está
-protegida.
+Antes de comenzar una sesión de trabajo:
 
-Los cambios que eventualmente deban incorporarse a `main` se realizarán
-mediante **Pull Request** y revisión.
+``` bash
+git switch android-app
+git pull origin android-app
+```
 
-------------------------------------------------------------------------
+Después de realizar cambios:
 
-## Seguridad
+``` bash
+git status
+git add .
+git commit -m "Descripción breve del cambio"
+git push origin android-app
+```
 
-Nunca deben incorporarse al repositorio:
+No deben incluirse credenciales reales en ningún commit.
 
--   API Keys reales;
--   tokens ESIOS;
--   credenciales personales;
--   archivos de configuración que contengan secretos.
-
-Las credenciales utilizadas por la aplicación deberán almacenarse de
-forma segura en el dispositivo y no aparecer en logs, informes ni
-archivos exportados.
-
-------------------------------------------------------------------------
-
-## Distribución
-
-La primera versión no necesita publicarse en Google Play.
-
-El objetivo inicial es generar un **APK instalable directamente en
-Android**, manteniendo también una compilación reproducible y
-documentada.
+La rama `main` se mantiene protegida. Cualquier cambio que deba llegar
+posteriormente a `main` debe revisarse mediante **Pull Request**.
 
 ------------------------------------------------------------------------
 
-## Estado del proyecto
+## 12. Seguridad
 
-**Fase actual:** preparación de la arquitectura y documentación para
-iniciar el desarrollo Android.
+### Nunca subir al repositorio
 
-El siguiente objetivo técnico es conseguir que una aplicación Android
-mínima pueda llamar al motor Python con datos de prueba y recibir un
-resultado estructurado.
+``` text
+API Keys reales
+tokens ESIOS reales
+contraseñas
+credenciales personales
+archivos locales con secretos
+logs que contengan secretos
+```
+
+Las credenciales de usuario deben almacenarse mediante mecanismos
+apropiados de Android y no como constantes dentro del código.
+
+Antes de realizar un commit:
+
+``` bash
+git status
+git diff --cached
+```
+
+Debe comprobarse que no se está incorporando accidentalmente información
+sensible.
 
 ------------------------------------------------------------------------
 
-## Índice rápido
+## 13. Distribución inicial
 
-  ---------------------------------------------------------------------------------------------------------------
-  Documento                                                                   Contenido
-  --------------------------------------------------------------------------- -----------------------------------
-  [ARCHITECTURE.md](docs/ARCHITECTURE.md)                                     Arquitectura Android--Python
+La primera distribución prevista es un **APK instalable directamente**,
+sin necesidad de publicar inicialmente en Google Play.
 
-  [CONFIGURATION_AND_CREDENTIALS.md](docs/CONFIGURATION_AND_CREDENTIALS.md)   Configuración y seguridad
+El proceso de desarrollo deberá acabar permitiendo:
 
-  [DATA_SOURCES.md](docs/DATA_SOURCES.md)                                     AEMET, PVGIS, ESIOS y caché
+``` text
+Código fuente
+    ↓
+Compilación reproducible
+    ↓
+APK
+    ↓
+Instalación en dispositivo Android
+    ↓
+Configuración inicial
+    ↓
+Ejecución del motor
+```
 
-  [UI_MVP.md](docs/UI_MVP.md)                                                 Pantallas y experiencia de usuario
+La generación del APK no es por sí sola el criterio de éxito: la
+aplicación debe poder configurarse y ejecutar el flujo completo sin
+modificaciones manuales del código.
 
-  [DEVELOPMENT_PLAN.md](docs/DEVELOPMENT_PLAN.md)                             Fases y entregables
-  ---------------------------------------------------------------------------------------------------------------
+------------------------------------------------------------------------
+
+## 14. Primer hito técnico
+
+Antes de desarrollar toda la interfaz, debe demostrarse el camino
+crítico:
+
+``` text
+Android
+   ↓
+datos de prueba
+   ↓
+adaptador
+   ↓
+Python
+   ↓
+cálculo
+   ↓
+resultado estructurado
+   ↓
+Android
+```
+
+Por tanto, el primer hito no es construir todas las pantallas. Es
+conseguir que una aplicación Android mínima pueda:
+
+1.  invocar de forma controlada el código Python;
+2.  pasarle una entrada conocida;
+3.  recibir una respuesta estructurada;
+4.  mostrar un dato de esa respuesta en pantalla;
+5.  gestionar correctamente un error de ejecución.
+
+Una vez validado este circuito, se puede construir el onboarding y la
+interfaz completa sobre una integración ya demostrada.
+
+------------------------------------------------------------------------
+
+## 15. Siguiente lectura
+
+Para comenzar la implementación:
+
+**→ [Arquitectura detallada y contrato
+Android--Python](docs/ARCHITECTURE.md)**
+
+Después:
+
+**→ [Configuración y
+credenciales](docs/CONFIGURATION_AND_CREDENTIALS.md)**
 
 ------------------------------------------------------------------------
 
 **Gestión Solar Predictiva --- Android app**\
-Septiembre de 2026
+Documentación de desarrollo · Septiembre de 2026
