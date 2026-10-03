@@ -50,7 +50,7 @@ Gestion-Solar-AEMET-ESIOS/    ← motor (intacto)
 |---|---|---|
 | `make mvp` | Copia el motor + adaptador a `mvp/python`, genera `manifest.json` y empaqueta jQuery/OnsenUI. | `logs/mvp-*.log` |
 | `make test` | Pruebas Python (`unittest`), prueba de humo del contrato y pruebas JS (node). | `logs/test-*.log` |
-| `make serve` | Sirve el MVP en <http://localhost:8080>. | `logs/serve-*.log` |
+| `make serve` | Sirve el MVP en <http://localhost:8080> (multihilo y **sin caché**, vía `scripts/serve.py`). | `logs/serve-*.log` |
 | `make android` | Crea el proyecto Capacitor en `gestion-solar/`, sincroniza y compila el APK. **Requiere JDK + Android SDK en el host.** | `logs/android-*.log` |
 | `make vendor-pyodide` | Copia local del runtime Pyodide + paquetes (arranque sin CDN). | `logs/vendor-pyodide-*.log` |
 | `make clean` | Borra artefactos generados (no toca el código fuente). | — |
@@ -163,6 +163,10 @@ La traducción a texto está en `mvp/js/reasons.js`.
 - Las credenciales se guardan aparte de la configuración
   (`gs.credentials.v1` frente a `gs.config.v1`) y **nunca** aparecen en
   el plan ni en los registros.
+- La validación desde la interfaz (botón VALIDAR) también **materializa**
+  `mytoken.env` antes de importar los módulos: el motor comprueba que el
+  fichero *exista* al importar, así que no basta con definir la variable
+  de entorno.
 
 > **MVP**: se usa `localStorage`. El almacenamiento cifrado propio de
 > Android (Keystore) queda para una fase posterior.
@@ -236,6 +240,18 @@ make test
 6. **Secretos** en `localStorage` (ver §4).
 7. **Modo demostración.** Ejecuta el motor real con fuentes de datos
    simuladas (ver §2). No es una simulación paralela en JavaScript.
+   Es **temporal**: no se persiste, así que al configurar credenciales
+   reales la app vuelve al modo real. Para forzarlo (desarrollo) se usa
+   `?demo=1`; y desde **Ajustes → «Salir del modo demostración»** se
+   vuelve a los datos reales sin reiniciar.
+8. **PVGIS y CORS.** PVGIS (`re.jrc.ec.europa.eu`) **no** envía cabeceras
+   `Access-Control-Allow-Origin`, por lo que el navegador bloquea su
+   petición (AEMET y ESIOS sí permiten CORS y funcionan desde el WebView).
+   Ante el fallo, el adaptador usa un **respaldo**: estima la referencia
+   solar con un modelo de cielo despejado para la latitud y fecha dadas,
+   devuelve `sources.pvgis.status = "fallback"` y añade un aviso; el resto
+   del cálculo sigue siendo el del motor. En la app Android la app **sí**
+   obtiene el dato real de PVGIS usando HTTP nativo (ver §10).
 
 ---
 
@@ -263,3 +279,63 @@ ARRANQUE ──¿configurado?── no ─▶ BIENVENIDA → ONBOARDING (8 pasos
 - Código y textos de la UI en **español**.
 - No añadir campos de configuración que el motor no utilice.
 - No versionar credenciales, keystores ni `mytoken.env`.
+
+---
+
+## 10. PVGIS real en Android (HTTP nativo)
+
+PVGIS no envía cabeceras CORS, por lo que `requests` dentro de Pyodide no
+puede consultarlo desde el WebView. En la app Android se obtiene el dato
+real con el plugin nativo **CapacitorHttp**, que no está sujeto a CORS.
+
+### Por qué NO se parchea `fetch` global
+
+El flag `plugins.CapacitorHttp.enabled` parchea `window.fetch` y
+`XMLHttpRequest` **globalmente**. Pyodide carga su *wasm*, su stdlib y los
+ficheros del motor desde el servidor local de assets (`https://localhost`);
+parchear todo podría interferir con esa carga. Por eso la app llama al
+plugin **explícitamente** y deja la carga de assets intacta.
+
+### Flujo (`mvp/js/pvgis.js`)
+
+```
+run()  ─(solo Android, no demo)─▶ fetchPvgisSeries(config)
+                                 ├─ resolveCoordinates: config → Nominatim (nativo)
+                                 └─ CapacitorHttp.get(PVGIS_URL, params)  → outputs.hourly
+        │
+        ▼  { serie, coordinates }
+api.runPlan({ … , pvgis: serie, coordinates })
+        │  (las coordenadas se añaden a config.location, NO se persisten)
+        ▼
+engine.runPlan(..., pvgis_series)  ─▶  android_adapter.run_plan(pvgis_series=…)
+        │  inyecta solar.consultar_pvgis = lambda: serie
+        ▼
+sources.pvgis.status = "native"   (sin aviso)
+```
+
+- Los parámetros de PVGIS (`lat, lon, startyear, endyear, pvcalculation,
+  peakpower, loss, angle, aspect, outputformat`) son los mismos que usa el
+  motor (`solar.py`); `peakpower` se calcula como `nº paneles × W panel`.
+- La convención de azimut es la del motor/PVGIS: `0 = Sur`, `-90 = Este`.
+- El motor sigue procesando la serie (perfil de referencia, irradiancia,
+  temperatura de célula, balance, despacho, plan semanal): la app sólo
+  aporta el dato que no puede pedir por CORS.
+- Si no hay HTTP nativo, o falla, o faltan coordenadas, `fetchPvgisSeries`
+  devuelve `null` y el adaptador usa su respaldo de cielo despejado
+  (`sources.pvgis.status = "fallback"`).
+
+### Requisitos del build
+
+- `android-app/capacitor.config.json` es la fuente de verdad;
+  `scripts/build_android.sh` la copia al proyecto Capacitor (permite
+  sobrescribir `appId`/`appName` por entorno) y garantiza que
+  `CapacitorHttp` esté declarado.
+- Antes de `make android` conviene ejecutar `make vendor-pyodide`, para que
+  el runtime Python arranque sin CDN dentro del APK (build_android avisa si
+  falta). El plugin nativo requiere `@capacitor/core` + `@capacitor/android`
+  (los instala el propio build).
+
+> Si en tu versión de Capacitor el plugin no quedara disponible sin el flag
+> global, activa `plugins.CapacitorHttp.enabled = true` en
+> `capacitor.config.json` y comprueba que la app sigue cargando Pyodide.
+

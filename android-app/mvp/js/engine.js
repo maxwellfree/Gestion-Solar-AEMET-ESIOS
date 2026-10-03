@@ -167,8 +167,8 @@ class PyodideEngine {
     this.pyodide = pyodide;
   }
 
-  async runPlan({ config, credentials, soc, refresh = false, estrategia = null, demo = false }) {
-    const payload = JSON.stringify({ config, credentials, soc, refresh, estrategia, demo });
+  async runPlan({ config, credentials, soc, refresh = false, estrategia = null, demo = false, pvgis = null }) {
+    const payload = JSON.stringify({ config, credentials, soc, refresh, estrategia, demo, pvgis });
     this.pyodide.globals.set("__gs_payload", payload);
     try {
       const output = await this.pyodide.runPythonAsync(`
@@ -182,6 +182,7 @@ _result = android_adapter.run_plan(
     refresh=bool(_payload.get("refresh")),
     estrategia=_payload.get("estrategia"),
     demo=bool(_payload.get("demo")),
+    pvgis_series=_payload.get("pvgis"),
 )
 android_adapter.dumps(_result)
 `);

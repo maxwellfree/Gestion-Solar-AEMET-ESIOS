@@ -2,12 +2,13 @@
 #
 # serve.sh — sirve el MVP en local para desarrollo/pruebas
 # ========================================================
+# Usa scripts/serve.py (multihilo + sin caché): evita servir módulos JS
+# antiguos ya editados y evita el bloqueo de las peticiones paralelas de
+# Pyodide.
 #
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PORT="${PORT:-8080}"
 
-cd "$ROOT/mvp"
-echo "[serve] http://localhost:$PORT/  (Ctrl+C para detener)"
-exec python3 -m http.server "$PORT" --bind 0.0.0.0
+exec python3 "$ROOT/scripts/serve.py" "$PORT" "$ROOT/mvp"

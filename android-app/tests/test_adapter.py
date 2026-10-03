@@ -444,7 +444,117 @@ class TestDemoMode(unittest.TestCase):
         self.assertIsInstance(engine.solar.consultar_pvgis(), list)
 
 
+class TestPvgisFallback(unittest.TestCase):
+    """Errores de red/CORS de Pyodide y respaldo de PVGIS."""
+
+    def test_js_network_error_es_network_error(self):
+        class JsException(Exception):
+            pass
+
+        exc = JsException(
+            "NetworkError: Failed to execute 'send' on 'XMLHttpRequest': "
+            "Failed to load 'https://re.jrc.ec.europa.eu/api/v5_3/seriescalc'"
+        )
+        err = adapter.classify_exception(exc, source="pvgis")
+        self.assertEqual(err.category, "NETWORK_ERROR")
+
+    def test_climatology_series_estructura(self):
+        cfg = {
+            "localizacion": {"latitud": 37.2},
+            "fotovoltaica": {"inclinacion_grados": 33, "potencia_total_kwp": 6.05},
+        }
+        solar_stub = SimpleNamespace()  # sin ZONA_HORARIA_LOCAL -> UTC
+        serie = adapter._climatology_series(solar_stub, cfg, HOY)
+        self.assertEqual(len(serie), 48)  # 2 días x 24 h
+        for reg in serie:
+            self.assertEqual(
+                set(reg.keys()), {"time", "G(i)", "T2m", "WS10m", "P"}
+            )
+        # de noche (00:00) la irradiancia es 0; de día (12:00) positiva
+        self.assertEqual(serie[0]["G(i)"], 0.0)
+        self.assertGreater(serie[12]["G(i)"], 0.0)
+
+    def test_install_pvgis_fallback_activa_respaldo(self):
+        engine = build_fake_engine()
+
+        def _boom(*a, **k):
+            raise RuntimeError("bloqueado por CORS")
+
+        engine.solar = SimpleNamespace(consultar_pvgis=_boom)
+        cfg = {
+            "localizacion": {"latitud": 37.2},
+            "fotovoltaica": {"inclinacion_grados": 33, "potencia_total_kwp": 6.05},
+        }
+        state = {"fallback": False}
+
+        adapter._install_pvgis_fallback(engine, cfg, HOY, state)
+        serie = engine.solar.consultar_pvgis(cfg)
+
+        self.assertTrue(state["fallback"])
+        self.assertIsInstance(serie, list)
+        self.assertEqual(len(serie), 48)
+
+    def test_install_pvgis_fallback_no_toca_si_funciona(self):
+        engine = build_fake_engine()
+        llamadas = []
+
+        def _ok(config=None):
+            llamadas.append(config)
+            return [{"time": "20260921:1200", "G(i)": 500.0}]
+
+        engine.solar = SimpleNamespace(consultar_pvgis=_ok)
+        state = {"fallback": False}
+        adapter._install_pvgis_fallback(engine, {"localizacion": {}}, HOY, state)
+        res = engine.solar.consultar_pvgis({"localizacion": {}})
+        self.assertEqual(len(res), 1)
+        self.assertFalse(state["fallback"])
+        self.assertEqual(len(llamadas), 1)
+
+
+    def test_pvgis_series_nativa_se_inyecta(self):
+        engine = build_fake_engine()
+        serie = [{"time": "20260921:1200", "G(i)": 500.0}]
+        result = adapter.run_plan(
+            config={}, soc=0.6, date=HOY, pvgis_series=serie, engine=engine
+        )
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["sources"]["pvgis"]["status"], "native")
+        self.assertFalse(any("PVGIS" in w for w in result["warnings"]))
+        self.assertEqual(engine.solar.consultar_pvgis(), serie)
+
+    def test_pvgis_series_vacia_no_es_nativa(self):
+        engine = build_fake_engine()
+        result = adapter.run_plan(
+            config={}, soc=0.6, date=HOY, pvgis_series=[], engine=engine
+        )
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["sources"]["pvgis"]["status"], "ok")
+
+
 class TestCredentials(unittest.TestCase):
+    def test_validate_credential_materializa_mytoken(self):
+        """VALIDAR debe crear mytoken.env: el motor exige que el fichero
+        exista al importar (no basta con la variable de entorno)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            original = adapter.engine_dir
+            adapter.engine_dir = lambda: tmp
+            try:
+                result = adapter.validate_credential("aemet", "CLAVE_X")
+            finally:
+                adapter.engine_dir = original
+
+            path = os.path.join(tmp, "mytoken.env")
+            self.assertTrue(os.path.isfile(path))
+            with open(path, encoding="utf-8") as handle:
+                contenido = handle.read()
+            self.assertIn("AEMET_API_KEY=CLAVE_X", contenido)
+            # El resultado es un estado controlado (nunca una excepción).
+            self.assertIn(result["status"], ("invalid", "network_error", "service_unavailable", "valid"))
+
+    def test_validate_credential_vacia(self):
+        result = adapter.validate_credential("aemet", "")
+        self.assertEqual(result["status"], "configuration_error")
+
     def test_write_token_file(self):
         with tempfile.TemporaryDirectory() as tmp:
             adapter._write_token_file(tmp, "CLAVE_AEMET", "TOKEN_ESIOS")

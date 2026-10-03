@@ -152,6 +152,22 @@ def classify_exception(exc: BaseException, source: str | None = None) -> Adapter
     if name in ("ConnectionError", "SSLError", "RequestException"):
         return AdapterError("NETWORK_ERROR", "No se ha podido conectar con el servicio externo.", source)
 
+    # Pyodide/browser: pyodide-http lanza JsException con NetworkError cuando
+    # el navegador bloquea la petición (CORS) o no hay red.
+    low = text.lower()
+    if (
+        name in ("JsException", "Error")
+        or "networkerror" in low
+        or "xmlhttprequest" in low
+        or "failed to load" in low
+        or "cors" in low
+    ):
+        return AdapterError(
+            "NETWORK_ERROR",
+            "No se ha podido conectar con el servicio externo (bloqueo CORS o sin red).",
+            source,
+        )
+
     if name == "HTTPError":
         status = getattr(getattr(exc, "response", None), "status_code", None)
         if status in (401, 403):
@@ -378,8 +394,16 @@ def validate_credential(source: str, value: str) -> dict:
     env_name = "AEMET_API_KEY" if source == "aemet" else "ESIOS_API_KEY"
     os.environ[env_name] = value
 
+    # El motor comprueba que EXISTA mytoken.env al importar sus módulos
+    # (aemet/esios/aemet_hourly comprueban el fichero, no sólo la variable de
+    # entorno), así que hay que materializarlo ANTES de importar. Se
+    # conserva la otra credencial si ya se conocía (entorno).
+    directory = engine_dir()
+    aemet_value = value if source == "aemet" else os.environ.get("AEMET_API_KEY")
+    esios_value = value if source == "esios" else os.environ.get("ESIOS_API_KEY")
+    _write_token_file(directory, aemet_value, esios_value)
+
     try:
-        directory = engine_dir()
         if directory not in sys.path:
             sys.path.insert(0, directory)
 
@@ -760,6 +784,95 @@ def _demo_esios_indicator(indicador_id, start_date):
 
 
 # ==========================================================
+# Respaldo de PVGIS (sin conexión / bloqueo CORS)
+# ==========================================================
+
+def _install_pvgis_fallback(engine, configuracion, start_date, state) -> None:
+    """Envuelve ``solar.consultar_pvgis`` con un respaldo transparente.
+
+    PVGIS (``re.jrc.ec.europa.eu``) no envía cabeceras ``Access-Control-
+    Allow-Origin``, de modo que desde el navegador (Pyodide) la petición
+    queda bloqueada por CORS. Si la consulta real falla, se genera una
+    referencia solar estimada por cielo despejado para la latitud y fecha
+    dadas, y se marca ``state['fallback'] = True``. El resto del motor
+    (modelo de irradiancia, temperatura de célula, balance, despacho…) se
+    ejecuta con normalidad.
+    """
+    original = getattr(engine.solar, "consultar_pvgis", None)
+    if original is None:
+        return
+
+    def consultar_pvgis(config=None):
+        try:
+            return original(config if config is not None else configuracion)
+        except Exception:
+            state["fallback"] = True
+            return _climatology_series(engine.solar, configuracion, start_date)
+
+    engine.solar.consultar_pvgis = consultar_pvgis
+
+
+def _as_float(value, default):
+    """Convierte a float de forma segura (None/''/no numérico -> default)."""
+    if value in (None, ""):
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _climatology_series(solar_module, configuracion, start_date):
+    """Serie horaria estimada (cielo despejado) con el formato de PVGIS.
+
+    Modelo simplificado: declinación solar + ángulo de elevación; la
+    irradiancia en el plano de los módulos se aproxima desde la
+    irradiancia horizontal con un factor de inclinación suave. Es una
+    estimación orientativa, no un cálculo físico riguroso.
+    """
+    localizacion = (configuracion or {}).get("localizacion", {}) or {}
+    lat = _as_float(localizacion.get("latitud"), 40.0)
+
+    fotovoltaica = (configuracion or {}).get("fotovoltaica", {}) or {}
+    inclinacion = _as_float(fotovoltaica.get("inclinacion_grados"), 30.0)
+
+    # Factor de transposición orientativo GHI -> POA.
+    factor = 0.95 + 0.25 * math.cos(math.radians(90.0 - inclinacion))
+
+    potencia_w = _as_float(fotovoltaica.get("potencia_total_kwp"), 6.05) * 1000.0
+
+    to_utc = _local_to_utc(solar_module)
+
+    serie = []
+    for d in range(2):
+        fecha = start_date + timedelta(days=d)
+        doy = fecha.timetuple().tm_yday
+        declinacion = 23.45 * math.sin(math.radians(360.0 * (284 + doy) / 365.0))
+
+        for h in range(24):
+            angulo_horario = 15.0 * (h - 12)
+            sin_altura = (
+                math.sin(math.radians(lat)) * math.sin(math.radians(declinacion))
+                + math.cos(math.radians(lat))
+                * math.cos(math.radians(declinacion))
+                * math.cos(math.radians(angulo_horario))
+            )
+            sin_altura = max(0.0, sin_altura)
+            ghi = 1000.0 * sin_altura
+            poa = ghi * factor
+            serie.append(
+                {
+                    "time": to_utc(fecha, h).strftime("%Y%m%d:%H%M"),
+                    "G(i)": round(poa, 1),
+                    "T2m": round(15.0 + 10.0 * sin_altura, 1),
+                    "WS10m": 2.0,
+                    "P": round(potencia_w * (poa / 1000.0) * 0.85, 1),
+                }
+            )
+    return serie
+
+
+# ==========================================================
 # Orquestación
 # ==========================================================
 
@@ -771,6 +884,7 @@ def run_plan(
     date=None,
     estrategia: str | None = None,
     demo: bool = False,
+    pvgis_series: list | None = None,
     engine=None,
 ) -> dict:
     """Ejecuta el motor y devuelve un resultado estructurado.
@@ -795,6 +909,11 @@ def run_plan(
         (AEMET, ESIOS, PVGIS) se sustituyen por datos de ejemplo. De este
         modo el cálculo (demanda, FV, balance, despacho, optimización y
         plan semanal) es el del motor real, sin conexiones de red.
+    pvgis_series : list, optional
+        Serie horaria de PVGIS ya obtenida (p. ej. con el HTTP nativo de
+        Capacitor en Android, que evita el bloqueo CORS del navegador).
+        Si se proporciona, el motor la usa directamente en lugar de
+        consultar PVGIS por red.
     engine : namespace, optional
         Inyección del motor (pruebas). Si es ``None`` se carga el real.
 
@@ -840,11 +959,22 @@ def run_plan(
 
         hoy = date or _today()
 
+        pvgis_state = {"fallback": False, "native": False}
+
         if demo:
             _install_demo_sources(engine, hoy)
             warnings.append(
                 "Modo demostración: datos de ejemplo, sin conexión a AEMET/ESIOS/PVGIS."
             )
+        elif isinstance(pvgis_series, list) and pvgis_series:
+            # Serie PVGIS obtenida por HTTP nativo (CapacitorHttp) en Android:
+            # se inyecta para que el motor no tenga que consultar PVGIS.
+            engine.solar.consultar_pvgis = lambda *a, **k: pvgis_series
+            pvgis_state["native"] = True
+        else:
+            # PVGIS no envía cabeceras CORS, por lo que en el navegador su
+            # consulta se bloquea. Se instala un respaldo transparente.
+            _install_pvgis_fallback(engine, configuracion, hoy, pvgis_state)
 
         demanda = engine.demand.obtener_configuracion_demanda(fecha=hoy)
 
@@ -866,6 +996,13 @@ def run_plan(
             prevision_horaria=prevision_horaria,
             prevision_diaria=prevision_hoy,
         )
+
+        if pvgis_state["fallback"]:
+            warnings.append(
+                "PVGIS no disponible (bloqueo CORS o sin red): la referencia "
+                "solar se ha estimado con un modelo de cielo despejado."
+            )
+
         energia_fv = engine.solar.energia_fv_diaria(perfil_fv)
         pico_fv = engine.solar.obtener_pico_fv(perfil_fv)
 
@@ -930,6 +1067,8 @@ def run_plan(
             plan_semanal=plan_semanal,
             warnings=warnings,
             demo=demo,
+            pvgis_fallback=pvgis_state["fallback"],
+            pvgis_native=pvgis_state["native"],
             engine=engine,
         )
         result["status"] = "ok"
@@ -1001,12 +1140,22 @@ def _build_result(**ctx) -> dict:
     plan = ctx["plan"] or {}
     plan_semanal = ctx["plan_semanal"] or {}
     demo = bool(ctx.get("demo"))
+    pvgis_fallback = bool(ctx.get("pvgis_fallback"))
+    pvgis_native = bool(ctx.get("pvgis_native"))
 
     calidad = _calidad_solar(plan, ctx["prevision_hoy"])
     today_actions = _build_today_actions(ctx["plan_horario"], calidad, ctx["configuracion"], ctx["soc"])
     weekly_plan = _build_weekly_plan(plan_semanal)
 
     source_status = "demo" if demo else "ok"
+    if demo:
+        pvgis_status = "demo"
+    elif pvgis_native:
+        pvgis_status = "native"
+    elif pvgis_fallback:
+        pvgis_status = "fallback"
+    else:
+        pvgis_status = "ok"
 
     return {
         "schema_version": SCHEMA_VERSION,
@@ -1017,10 +1166,11 @@ def _build_result(**ctx) -> dict:
         "cache_status": "updated" if ctx["refresh"] else "cached",
         # Nota: el motor no expone la procedencia por fuente; el adaptador
         # no la inventa (DATA_SOURCES.md, §7.2). En modo demo todas las
-        # fuentes son datos de ejemplo.
+        # fuentes son datos de ejemplo; PVGIS puede ser "fallback" si el
+        # navegador lo bloquea por CORS.
         "sources": {
             "aemet": {"status": source_status, "from_cache": None},
-            "pvgis": {"status": source_status, "from_cache": None},
+            "pvgis": {"status": pvgis_status, "from_cache": None},
             "esios": {"status": source_status, "from_cache": None},
         },
         "input": {

@@ -18,15 +18,33 @@ import * as reasons from "../../mvp/js/reasons.js";
 import * as store from "../../mvp/js/store.js";
 import { mapPlan } from "../../mvp/js/mapper.js";
 import { buildDemoResult, buildDemoError } from "../../mvp/js/demo.js";
+import * as pvgis from "../../mvp/js/pvgis.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
 let passed = 0;
 let failed = 0;
+const pending = [];
 
 function test(name, fn) {
   try {
-    fn();
+    const result = fn();
+    if (result && typeof result.then === "function") {
+      // Prueba asíncrona: se resuelve antes del resumen.
+      pending.push(
+        result.then(
+          () => {
+            passed += 1;
+            console.log(`  \x1b[32m✓\x1b[0m ${name}`);
+          },
+          (err) => {
+            failed += 1;
+            console.error(`  \x1b[31m✗\x1b[0m ${name}\n      ${err.message}`);
+          }
+        )
+      );
+      return;
+    }
     passed += 1;
     console.log(`  \x1b[32m✓\x1b[0m ${name}`);
   } catch (err) {
@@ -121,9 +139,20 @@ test("validateStep detecta errores", () => {
   eq(store.validateStep("pv", { pv: { panels: 10, panel_power_w: 605 } }).length, 0);
 });
 test("isConfigured requiere credenciales y configuración", () => {
-  const c = store.defaultConfig();
-  ok(!store.isConfigured(c, store.defaultCredentials()));
-  ok(store.isConfigured(c, { aemet_api_key: "x", esios_token: "y" }));
+  const creds = { aemet_api_key: "A", esios_token: "B" };
+  ok(store.isConfigured(store.defaultConfig(), creds));
+  ok(!store.isConfigured(store.defaultConfig(), { aemet_api_key: "A", esios_token: "" }));
+});
+
+test("credenciales: AEMET y ESIOS se guardan y leen por separado", () => {
+  const s = store.memoryStorage();
+  store.saveCredentials({ aemet_api_key: "AAAA1111", esios_token: "BBBB2222" }, s);
+  const raw = JSON.parse(s.getItem(store.CREDENTIALS_KEY));
+  eq(raw.aemet_api_key, "AAAA1111");
+  eq(raw.esios_token, "BBBB2222");
+  const loaded = store.loadCredentials(s);
+  eq(loaded.aemet_api_key, "AAAA1111");
+  eq(loaded.esios_token, "BBBB2222");
 });
 
 /* -------------------- mapper.js -------------------- */
@@ -151,6 +180,35 @@ test("error mapeado", () => {
   const err = mapPlan(buildDemoError("AUTHENTICATION_ERROR"));
   eq(err.status, "error");
   ok(err.error.title.toLowerCase().includes("credencial"));
+});
+
+/* -------------------- pvgis.js (HTTP nativo Android) -------------------- */
+
+group("pvgis.js");
+
+test("buildPvgisParams calcula kWp y geometría como el motor", () => {
+  const p = pvgis.buildPvgisParams({
+    pv: { panels: 10, panel_power_w: 605, inclination_deg: 33, azimuth_deg: -10 },
+  });
+  eq(p.peakpower, 6.05);
+  eq(p.angle, 33);
+  eq(p.aspect, -10);
+  eq(p.pvcalculation, 1);
+  eq(p.loss, 0);
+  eq(p.startyear, pvgis.PVGIS_ANIO_INICIO);
+  eq(p.endyear, pvgis.PVGIS_ANIO_FIN);
+  eq(p.outputformat, "json");
+});
+
+test("sin ventana/Capacitor no hay HTTP nativo", () => {
+  eq(pvgis.nativeHttp(), null);
+  eq(pvgis.isNativeHttpAvailable(), false);
+});
+
+test("fetchPvgisSeries devuelve null sin HTTP nativo", async () => {
+  // En node no existe window.Capacitor: debe devolver null sin lanzar.
+  const r = await pvgis.fetchPvgisSeries({ location: {}, pv: {} });
+  eq(r, null);
 });
 
 /* -------------------- contrato real (fixture) -------------------- */
@@ -189,6 +247,8 @@ if (fixture) {
 }
 
 /* -------------------- resumen -------------------- */
+
+await Promise.all(pending);
 
 console.log(`\n${passed} pruebas correctas, ${failed} fallidas.`);
 process.exit(failed === 0 ? 0 : 1);

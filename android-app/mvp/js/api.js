@@ -97,10 +97,20 @@ export class SolarApi {
    * Ejecuta el plan energético.
    * @returns {Promise<object>} resultado con el contrato real.
    */
-  async runPlan({ soc, refresh = false, estrategia = null } = {}) {
+  async runPlan({ soc, refresh = false, estrategia = null, pvgis = null, coordinates = null } = {}) {
     const engine = await this.ensureEngine();
     const config = this.getConfig();
     const credentials = this.getCredentials();
+
+    // Coordenadas resueltas por HTTP nativo (no se persisten): permiten al
+    // motor usar PVGIS sin geocodificar por red.
+    if (coordinates) {
+      config.location = {
+        ...(config.location || {}),
+        latitude: coordinates.latitude,
+        longitude: coordinates.longitude,
+      };
+    }
 
     const result = await engine.runPlan({
       config,
@@ -109,6 +119,7 @@ export class SolarApi {
       refresh,
       estrategia: estrategia || config.strategy,
       demo: this.demo,
+      pvgis,
     });
 
     this.lastResult = result;

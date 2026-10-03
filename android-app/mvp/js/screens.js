@@ -315,7 +315,7 @@ function chart(profile, key, barClass) {
 /* ------------------------------------------------------------------ */
 
 export function renderSettings($el, ctx) {
-  const { config, credentials, status, engineKind, fellBack, onEdit, onRefreshNow, onClearCredentials, onResetConfig, onProbe } = ctx;
+  const { config, credentials, status, engineKind, fellBack, demo, onEdit, onRefreshNow, onClearCredentials, onResetConfig, onProbe, onDisableDemo } = ctx;
 
   const c = config || {};
   const loc = c.location || {};
@@ -335,8 +335,9 @@ export function renderSettings($el, ctx) {
   $el.html(`
     <div class="gs-group-title">Aplicación</div>
     <div class="gs-group">
-      ${item("Motor", engineKind === "pyodide" ? "Python embebido (Pyodide)" : "Demostración (datos de ejemplo)")}
+      ${item("Motor", demo || fellBack ? "Demostración (datos de ejemplo)" : engineKind === "pyodide" ? "Python embebido (Pyodide)" : "—")}
       ${item("Estado", `<span id="settings-status">${esc(status || "—")}</span>`)}
+      ${demo ? item("Salir del modo demostración", "Usar mis datos reales (AEMET / PVGIS / ESIOS)", 'data-action="real"') : ""}
     </div>
 
     <div class="gs-group-title">Datos</div>
@@ -370,6 +371,7 @@ export function renderSettings($el, ctx) {
 
   $el.find('[data-action="refresh"]').on("click", () => onRefreshNow());
   $el.find('[data-action="probe"]').on("click", () => onProbe());
+  $el.find('[data-action="real"]').on("click", () => onDisableDemo && onDisableDemo());
   $el.find('[data-action="edit"], [data-action="edit-config"]').on("click", () => onEdit("credentials"));
   $el.find('[data-action="clear"]').on("click", () => onClearCredentials());
   $el.find('[data-action="reset"]').on("click", () => onResetConfig());
