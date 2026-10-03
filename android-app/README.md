@@ -41,7 +41,7 @@ La separación entre capas debe mantenerse durante todo el desarrollo:
 ``` text
 ┌─────────────────────────────────────────────┐
 │              APLICACIÓN ANDROID             │
-│        Kotlin + Jetpack Compose             │
+│        Capacitor + OnsenUI                  │
 │                                             │
 │  configuración · credenciales · SOC · UI    │
 └──────────────────────┬──────────────────────┘
@@ -52,6 +52,7 @@ La separación entre capas debe mantenerse durante todo el desarrollo:
 │                                             │
 │  entrada estructurada → run_plan(...)       │
 │  salida estructurada  ← dict / JSON         │
+|                 pyodide                     |
 └──────────────────────┬──────────────────────┘
                        │
                        ▼

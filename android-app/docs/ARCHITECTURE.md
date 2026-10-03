@@ -68,7 +68,7 @@ proyecto.
 ``` text
 ┌──────────────────────────────────────────────────────┐
 │ PRESENTATION                                         │
-│ Jetpack Compose · Screens · Components · Navigation │
+│ OnsenUI · Screens · Components · Navigation │
 └────────────────────────┬─────────────────────────────┘
                          │ UI events / UI state
                          ▼
@@ -80,7 +80,7 @@ proyecto.
                          ▼
 ┌──────────────────────────────────────────────────────┐
 │ INTEGRATION                                          │
-│ PythonGateway · DTO mapping · error translation      │
+│ pyodide · DTO mapping · error translation      │
 └────────────────────────┬─────────────────────────────┘
                          │ structured data
                          ▼
@@ -231,6 +231,8 @@ def run_plan(config, soc: float, refresh: bool = False) -> dict:
 diseño, no se afirma que existan actualmente. Deben sustituirse por las
 funciones reales del repositorio.
 
+Se utilizará pyodide para implementar la conectividad entre Javascript y Python
+
 ------------------------------------------------------------------------
 
 ## 6. Contrato de entrada
@@ -371,9 +373,13 @@ data class PlanResultDto(
 Estos tipos son una propuesta inicial y deben ajustarse al contrato
 real.
 
+Nota: Estos tipos deberán ser tenidos en cuenta de forma que sean usables entre Capacitor y Python mediante pyodide
+
 ------------------------------------------------------------------------
 
 ## 9. `PythonGateway`
+
+Nota: Ajustar esto para que sea consistente con la propuesta de uso de pyodide
 
 El mecanismo de integración debe quedar oculto tras una interfaz:
 
@@ -756,6 +762,8 @@ El prototipo queda validado cuando:
 Hasta validar este circuito no es necesario construir todas las
 pantallas definitivas.
 
+Nota: Esto deberá transformarse de modo que se adapte a la arquitectura Capacitor - pyodide
+
 ------------------------------------------------------------------------
 
 ## 20. Decisiones todavía abiertas
@@ -807,11 +815,11 @@ acoplar toda la UI.
 
 Antes de añadir código:
 
-**¿Es presentación?** → Compose.
+**¿Es presentación?** → OnsenUI.
 
 **¿Es estado de pantalla?** → ViewModel / application.
 
-**¿Traduce Android ↔ Python?** → integration.
+**¿Traduce Android ↔ Python?** → pyodide.
 
 **¿Es una decisión energética?** → Python.
 

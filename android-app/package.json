@@ -1,0 +1,10 @@
+{
+  "name": "gestion-solar-predictiva-android",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "MVP Android (Capacitor + OnsenUI + Pyodide) sobre el motor Gestion-Solar-AEMET-ESIOS",
+  "scripts": {
+    "test": "node tests/js/run.mjs"
+  }
+}

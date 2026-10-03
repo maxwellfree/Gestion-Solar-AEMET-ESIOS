@@ -1,0 +1,20 @@
+# Artefactos generados por el Makefile
+/mvp/python/
+/mvp/vendor/
+/logs/
+/tests/fixtures/
+
+# Proyecto Capacitor generado
+/gestion-solar/
+node_modules/
+package-lock.json
+
+# Python
+__pycache__/
+*.pyc
+
+# Secretos (NUNCA versionar)
+mytoken.env
+.env
+*.keystore
+*.jks

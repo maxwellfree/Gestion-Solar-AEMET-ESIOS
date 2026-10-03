@@ -1,0 +1,11 @@
+{
+  "name": "Gestión Solar Predictiva",
+  "short_name": "Solar Predictiva",
+  "description": "Predicción y planificación del uso de energía solar doméstica.",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#0b6e4f",
+  "theme_color": "#0b6e4f",
+  "lang": "es",
+  "icons": []
+}
