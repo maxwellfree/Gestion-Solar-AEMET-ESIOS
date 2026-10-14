@@ -26,6 +26,7 @@ import {
   renderWeek,
   renderEnergy,
   renderSettings,
+  renderHelp,
   renderDetail,
 } from "./screens.js";
 
@@ -305,6 +306,7 @@ const App = {
       onProbe: () => this.probe(),
       onDisableDemo: () => this.disableDemo(),
     });
+    renderHelp(this.$shell.find("#view-ayuda"));
     this.rebuildIndex();
   },
 

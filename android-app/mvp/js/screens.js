@@ -435,3 +435,45 @@ export function renderLoading($el, message = "Preparando tu plan energético…"
 }
 
 export const __test__ = { esc, recommendationCard, cardClass };
+
+/* Ayuda y créditos: contenido estático, sin dependencias del motor. */
+export function renderHelp($el) {
+  $el.html(`
+    <div class="gs-help">
+      <h2>Ayuda y guía de uso</h2>
+      <div class="gs-card">
+        <h3>1. Configura tu instalación</h3>
+        <p>En <strong>Ajustes</strong>, introduce las características de tus paneles,
+        batería y consumo. Revisa las unidades y guarda la configuración.</p>
+        <h3>2. Conecta las fuentes de datos</h3>
+        <p>Configura la clave de AEMET y el token de ESIOS cuando corresponda.
+        La disponibilidad de las consultas depende de la conexión y de los servicios externos.</p>
+        <h3>3. Calcula el plan</h3>
+        <p>En <strong>Hoy</strong>, ajusta el estado de carga de la batería (SOC)
+        y pulsa <strong>CALCULAR PLAN</strong>. Consulta las recomendaciones y
+        selecciona <strong>¿Por qué?</strong> para ver sus motivos.</p>
+        <h3>4. Interpreta los resultados</h3>
+        <p><strong>Semana</strong> ofrece una visión temporal y <strong>Energía</strong>
+        presenta información energética. Las estimaciones no garantizan la producción real.</p>
+        <h3>5. Modo demostración</h3>
+        <p>Permite explorar la interfaz con datos de ejemplo; no deben interpretarse
+        como mediciones ni previsiones reales de tu instalación.</p>
+      </div>
+      <div class="gs-card gs-help__notice">
+        <h3>Importante</h3>
+        <p>La aplicación ofrece recomendaciones informativas: no controla automáticamente
+        los equipos eléctricos. Verifica las condiciones reales antes de actuar.</p>
+      </div>
+      <h2>Acerca de y créditos</h2>
+      <div class="gs-card">
+        <p><strong>Gestión Solar Predictiva</strong></p>
+        <p><strong>Enrique M. Moreno Pérez</strong><br>
+        Motor original de cálculo y gestión energética en Python.</p>
+        <p><strong>David Doyágüez Sánchez</strong><br>
+        Desarrollo de la aplicación Android a partir del motor Python.</p>
+        <p class="gs-muted">Fuentes y servicios utilizados: AEMET, ESIOS y, cuando esté
+        configurado, PVGIS. Sus datos y condiciones de uso corresponden a sus respectivos proveedores.</p>
+        <p class="gs-muted">Para información técnica y licencia, consulta los archivos README.md y LICENSE del proyecto.</p>
+      </div>
+    </div>`);
+}

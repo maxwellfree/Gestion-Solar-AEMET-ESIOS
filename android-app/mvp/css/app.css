@@ -226,3 +226,11 @@ input[type="range"] { accent-color: var(--gs-primary); }
     --gs-border: #2b333b;
   }
 }
+
+/* Ayuda y créditos */
+.gs-help { padding: 16px; padding-bottom: 28px; max-width: 760px; margin: 0 auto; }
+.gs-help h2 { font-size: 20px; margin: 8px 0 14px; }
+.gs-help h3 { font-size: 16px; margin: 18px 0 6px; }
+.gs-help p { line-height: 1.55; margin: 8px 0 12px; }
+.gs-help__notice { border-left: 4px solid var(--gs-primary); }
+.gs-tabbar .gs-tab { min-width: 0; flex: 1 1 0; font-size: 12px; padding-left: 2px; padding-right: 2px; }
