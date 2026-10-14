@@ -540,6 +540,13 @@ interfaz completa sobre una integración ya demostrada.
 
 ------------------------------------------------------------------------
 
+## Autoría y desarrollo
+
+- **Motor Python original y modelo de gestión energética:** Enrique M. Moreno Pérez.
+- **Desarrollo de la aplicación Android a partir del motor Python:** David Doyágüez Sánchez.
+
+------------------------------------------------------------------------
+
 ## 15. Siguiente lectura
 
 Para comenzar la implementación:
