@@ -18,6 +18,16 @@
 
 ---
 
+
+## 📱 Aplicación Android
+
+El proyecto cuenta con una línea de desarrollo de una **aplicación Android** en la rama [`android-app`](https://github.com/maxwellfree/Gestion-Solar-AEMET-ESIOS/tree/android-app/android-app), destinada a configurar y ejecutar el motor Python de gestión solar predictiva desde un dispositivo móvil y presentar sus resultados.
+
+- **Motor Python original y modelo de gestión energética:** Enrique M. Moreno Pérez.
+- **Desarrollo de la aplicación Android a partir del motor Python:** David Doyágüez Sánchez.
+
+Para conocer el alcance, la arquitectura y el estado del desarrollo móvil, consulta el [README de Android](android-app/README.md). La aplicación se encuentra en desarrollo; esta descripción no implica que exista ya una versión instalable terminada.
+
 # 🇪🇸 Español
 
 ## ☀️ ¿Qué es Gestión Solar Predictiva?
